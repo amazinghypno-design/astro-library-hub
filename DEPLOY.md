@@ -9,13 +9,24 @@ Two pieces, two free services, both connected to one GitHub repo so future
 
 ## 0. Push this repo to GitHub
 
-1. Create a new **empty, private** repo on GitHub (no README/license — this repo already has files).
-2. In this project's terminal:
-   ```bash
-   git remote add origin <your-repo-url>
-   git branch -M main
-   git push -u origin main
-   ```
+**If you're new to GitHub, the easiest way — no terminal commands, no typing passwords/tokens anywhere:**
+
+1. [github.com](https://github.com) → **Sign up** (free — email + a username, no card).
+2. [desktop.github.com](https://desktop.github.com) → download **GitHub Desktop** → open it → sign in with the account from step 1 (opens your browser, you approve, done).
+3. In GitHub Desktop: **File → Add Local Repository** → pick this project's folder (`Astro-Library-Hub`) — it already has git set up.
+4. Click **Publish repository**. Keep **"Keep this code private"** checked. Click **Publish**.
+
+That's it — the code is now on GitHub, ready for Vercel and Render to connect to in the next steps.
+
+<details>
+<summary>Prefer the terminal instead?</summary>
+
+```bash
+git remote add origin <your-repo-url>
+git branch -M main
+git push -u origin main
+```
+</details>
 
 ## 1. Deploy the server on Render
 
