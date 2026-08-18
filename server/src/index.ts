@@ -1,0 +1,161 @@
+import "./env";
+import express from "express";
+import cors from "cors";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
+import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { Readable } from "node:stream";
+import { eq } from "drizzle-orm";
+import { appRouter } from "./routers/index";
+import { createContext } from "./routers/trpc";
+import { db } from "./db/client";
+import { libraryFiles, shareLinks } from "./db/schema";
+import { storageAdapter } from "./storage/index";
+import { buildContentDisposition } from "./domain/safeStorageKey";
+import { isPubliclyVisible } from "./domain/publicationPolicy";
+import { isShareLinkValid } from "./domain/shareLink";
+
+const app = express();
+
+// Behind a reverse proxy (Render/Railway/etc terminate TLS in front of us) —
+// without this, Express sees the connection as plain HTTP and refuses to set
+// secure cookies, breaking login in production.
+app.set("trust proxy", 1);
+
+app.use(
+  cors({
+    origin: process.env.CLIENT_ORIGIN ?? "http://localhost:5173",
+    credentials: true,
+  }),
+);
+// File bytes now go straight from the browser to storage (see
+// admin.createUploadUrl) — this server never sees them, so the JSON body
+// limit only needs to cover ordinary metadata payloads, not whole files.
+// (A previous mismatch here — Express capped below the app's own upload
+// limit — caused uploads to fail with a raw HTML error page instead of
+// JSON; keeping this small avoids that whole class of bug by construction.)
+app.use(express.json({ limit: "5mb" }));
+
+// Body-parser errors (e.g. payload too large) otherwise fall through to
+// Express's default HTML error page — return JSON instead so the client's
+// tRPC/JSON parsing never breaks on a non-JSON response.
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err && typeof err === "object" && "type" in err && (err as { type?: string }).type === "entity.too.large") {
+    res.status(413).json({ error: "PAYLOAD_TOO_LARGE" });
+    return;
+  }
+  next(err);
+});
+
+// Persistent (Postgres-backed) session store — the express-session default
+// is in-memory, which silently logs everyone out on every server restart.
+// That was happening constantly during development (each file save restarts
+// the dev server) and made admin actions like delete "randomly stop
+// working" with no visible error. Sessions now survive restarts.
+// Client and server live on different domains in production (e.g.
+// *.vercel.app talking to *.onrender.com) — that makes every API call a
+// cross-site request, and browsers only attach cookies to those when the
+// cookie is SameSite=None + Secure. Locally both run on http://localhost
+// (same-site), where Secure cookies don't work at all, hence the split.
+const isProd = process.env.NODE_ENV === "production";
+const PgSession = connectPgSimple(session);
+app.use(
+  session({
+    store: new PgSession({ conString: process.env.DATABASE_URL, tableName: "session", createTableIfMissing: true }),
+    secret: process.env.SESSION_SECRET ?? "dev-only",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd,
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+    },
+  }),
+);
+
+app.use(
+  "/trpc",
+  createExpressMiddleware({
+    router: appRouter,
+    createContext,
+  }),
+);
+
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+/**
+ * Download proxy: builds Content-Disposition ourselves instead of relying on
+ * Supabase's signed-URL `download` option, which double-percent-encodes
+ * non-ASCII filenames (verified with a real Thai .pdf — see HANDOFF.md).
+ * Streams from the storage provider rather than buffering the whole file.
+ */
+app.get("/download/:fileId", async (req, res) => {
+  // Express 4 does NOT catch rejections thrown inside an async handler — on
+  // Node 15+ an unhandled rejection crashes the whole process by default, not
+  // just this one request. Every await below used to be unguarded, so a
+  // single transient failure (a stale storage key, a network blip talking to
+  // R2, anything) could take the entire server down for every user, not just
+  // whoever was downloading. This try/catch is the fix.
+  try {
+    const [file] = await db.select().from(libraryFiles).where(eq(libraryFiles.id, req.params.fileId));
+    if (!file) return res.status(404).json({ error: "FILE_NOT_FOUND" });
+
+    const sessionUser = (req as unknown as { session?: { user?: { role: string } } }).session?.user;
+    const isAdmin = sessionUser?.role === "admin";
+
+    let hasValidShareToken = false;
+    const token = typeof req.query.token === "string" ? req.query.token : undefined;
+    if (token) {
+      const [link] = await db.select().from(shareLinks).where(eq(shareLinks.token, token));
+      hasValidShareToken = !!link && link.fileId === file.id && isShareLinkValid(link, new Date());
+    }
+
+    if (!isAdmin && !hasValidShareToken && !isPubliclyVisible(file.status, file.visibility)) {
+      return res.status(404).json({ error: "FILE_NOT_PUBLIC" });
+    }
+
+    const rawUrl = await storageAdapter.createPreviewUrl(file.storageKey);
+    const upstream = await fetch(rawUrl);
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).json({ error: "STORAGE_READ_FAILED" });
+    }
+
+    res.setHeader("Content-Type", file.mimeType);
+    res.setHeader("Content-Disposition", buildContentDisposition(file.originalName));
+    res.setHeader("Content-Length", String(file.size));
+    Readable.fromWeb(upstream.body as never).pipe(res);
+    return undefined;
+  } catch (err) {
+    console.error("[/download] failed:", err);
+    if (!res.headersSent) res.status(500).json({ error: "DOWNLOAD_FAILED" });
+    return undefined;
+  }
+});
+
+// Final safety net for any route added later that forgets its own try/catch
+// (Express doesn't call this for async errors unless something explicitly
+// passes them to next(err), but it's cheap insurance and keeps every
+// response JSON instead of Express's default HTML error page).
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[unhandled route error]:", err);
+  if (!res.headersSent) res.status(500).json({ error: "INTERNAL_ERROR" });
+});
+
+// Last-resort process-level safety net. On Node 15+, an unhandled promise
+// rejection anywhere in the process crashes the entire server by default —
+// taking every user down over one bad request, not just the one that failed.
+// Logging and staying up beats a silent, unexplained restart (this was the
+// likely cause of several "the site just went down" moments during
+// development, traced to /download's previously-unguarded async handler).
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]:", err);
+});
+
+const port = Number(process.env.PORT ?? 4000);
+app.listen(port, () => {
+  console.log(`Astro Library Hub server listening on http://localhost:${port}`);
+});
