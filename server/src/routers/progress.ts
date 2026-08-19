@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "../db/client";
-import { bookmarks, highlights, readingProgress } from "../db/schema";
+import { bookmarks, drawings, highlights, readingProgress } from "../db/schema";
 import { router, authedProcedure } from "./trpc";
+
+const pointSchema = z.object({ x: z.number(), y: z.number() });
 
 /**
  * Account-scoped reading progress + bookmarks — the synced-across-devices
@@ -25,10 +27,23 @@ export const progressRouter = router({
       .from(highlights)
       .where(and(eq(highlights.userId, ctx.user.id), eq(highlights.fileId, input.fileId)))
       .orderBy(asc(highlights.pageNumber));
+    const drawingRows = await db
+      .select({
+        id: drawings.id,
+        pageNumber: drawings.pageNumber,
+        tool: drawings.tool,
+        color: drawings.color,
+        strokeWidth: drawings.strokeWidth,
+        points: drawings.points,
+      })
+      .from(drawings)
+      .where(and(eq(drawings.userId, ctx.user.id), eq(drawings.fileId, input.fileId)))
+      .orderBy(asc(drawings.createdAt));
     return {
       lastPage: progress?.lastPage ?? null,
       bookmarks: marks.map((m) => m.pageNumber).sort((a, b) => a - b),
       highlights: highlightRows,
+      drawings: drawingRows,
     };
   }),
 
@@ -90,4 +105,52 @@ export const progressRouter = router({
     await db.delete(highlights).where(and(eq(highlights.id, input.id), eq(highlights.userId, ctx.user.id)));
     return { ok: true };
   }),
+
+  addDrawing: authedProcedure
+    .input(
+      z.object({
+        fileId: z.string().uuid(),
+        page: z.number().int().positive(),
+        tool: z.enum(["pen", "highlighter"]),
+        color: z.string().min(1),
+        strokeWidth: z.number().positive(),
+        points: z.array(pointSchema).min(2),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const [created] = await db
+        .insert(drawings)
+        .values({
+          userId: ctx.user.id,
+          fileId: input.fileId,
+          pageNumber: input.page,
+          tool: input.tool,
+          color: input.color,
+          strokeWidth: input.strokeWidth,
+          points: input.points,
+        })
+        .returning({
+          id: drawings.id,
+          pageNumber: drawings.pageNumber,
+          tool: drawings.tool,
+          color: drawings.color,
+          strokeWidth: drawings.strokeWidth,
+          points: drawings.points,
+        });
+      return created;
+    }),
+
+  removeDrawing: authedProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ input, ctx }) => {
+    await db.delete(drawings).where(and(eq(drawings.id, input.id), eq(drawings.userId, ctx.user.id)));
+    return { ok: true };
+  }),
+
+  clearPageDrawings: authedProcedure
+    .input(z.object({ fileId: z.string().uuid(), page: z.number().int().positive() }))
+    .mutation(async ({ input, ctx }) => {
+      await db
+        .delete(drawings)
+        .where(and(eq(drawings.userId, ctx.user.id), eq(drawings.fileId, input.fileId), eq(drawings.pageNumber, input.page)));
+      return { ok: true };
+    }),
 });

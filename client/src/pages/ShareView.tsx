@@ -67,6 +67,7 @@ export default function ShareView() {
           sheets={previewHtmlQuery.data?.sheets ?? undefined}
           fileId={file.id}
           pageOffset={file.pageOffset}
+          title={file.title}
         />
       </div>
     </div>

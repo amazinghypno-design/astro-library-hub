@@ -187,10 +187,17 @@ export const adminRouter = router({
 
       // Best-effort: extracted text/page count power the page-count display and the
       // future per-book Q&A (Phase 8c). A malformed PDF must not fail the upload.
+      // Skipped above HEAVY_PROCESSING_MAX_BYTES: on the free hosting tier's
+      // limited RAM, buffering + parsing a very large PDF for text extraction
+      // can exceed available memory and kill the whole request ("Failed to
+      // fetch" client-side, no clean error) — better to save the file with
+      // less metadata than to fail the upload entirely.
+      const HEAVY_PROCESSING_MAX_BYTES = 100 * 1024 * 1024;
+      const skipHeavyProcessing = bytes.byteLength > HEAVY_PROCESSING_MAX_BYTES;
       let extractedText: string | null = null;
       let pageCount: number | null = null;
       let detectedDocumentType = classifyDocumentType(input.mimeType, input.originalName);
-      if (input.mimeType === "application/pdf") {
+      if (input.mimeType === "application/pdf" && !skipHeavyProcessing) {
         try {
           const inspection = await inspectPdf(bytes);
           extractedText = inspection.fullText;
@@ -209,10 +216,11 @@ export const adminRouter = router({
       // through the browser first. Downloads always serve the untouched
       // original (storageKey) — this is purely a read-speed optimization.
       // Best-effort: skipped for small files (not worth it) and never fails
-      // the upload itself if compression errors out.
+      // the upload itself if compression errors out. Also skipped above
+      // HEAVY_PROCESSING_MAX_BYTES for the same free-tier memory reason as above.
       let previewStorageKey: string | null = null;
       const PREVIEW_WORTHY_MIN_BYTES = 5 * 1024 * 1024;
-      if (input.mimeType === "application/pdf" && bytes.byteLength > PREVIEW_WORTHY_MIN_BYTES) {
+      if (input.mimeType === "application/pdf" && !skipHeavyProcessing && bytes.byteLength > PREVIEW_WORTHY_MIN_BYTES) {
         try {
           const { bytes: previewBytes } = await compressPdfBuffer(bytes, { quality: 80, maxDimension: 1800 });
           if (previewBytes.byteLength < bytes.byteLength) {

@@ -7,3 +7,5 @@ server/storage/
 *.log
 .DS_Store
 *.tsbuildinfo
+render_env_vars.txt
+push_to_github.sh

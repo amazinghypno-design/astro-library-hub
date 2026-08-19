@@ -7,6 +7,7 @@
 const LAST_PAGE_PREFIX = "astro-library:last-page:";
 const BOOKMARKS_PREFIX = "astro-library:bookmarks:";
 const HIGHLIGHTS_PREFIX = "astro-library:highlights:";
+const DRAWINGS_PREFIX = "astro-library:drawings:";
 
 export interface HighlightRect {
   x: number;
@@ -20,6 +21,20 @@ export interface Highlight {
   pageNumber: number;
   text: string;
   rects: HighlightRect[];
+}
+
+export interface DrawingPoint {
+  x: number;
+  y: number;
+}
+
+export interface Drawing {
+  id: string;
+  pageNumber: number;
+  tool: "pen" | "highlighter";
+  color: string;
+  strokeWidth: number;
+  points: DrawingPoint[];
 }
 
 export function getLastPage(fileId: string): number | null {
@@ -68,5 +83,33 @@ export function addHighlightLocal(fileId: string, highlight: Omit<Highlight, "id
 export function removeHighlightLocal(fileId: string, id: string): Highlight[] {
   const next = getHighlights(fileId).filter((h) => h.id !== id);
   localStorage.setItem(HIGHLIGHTS_PREFIX + fileId, JSON.stringify(next));
+  return next;
+}
+
+export function getDrawings(fileId: string): Drawing[] {
+  try {
+    const raw = localStorage.getItem(DRAWINGS_PREFIX + fileId);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+export function addDrawingLocal(fileId: string, drawing: Omit<Drawing, "id">): Drawing[] {
+  const next = [...getDrawings(fileId), { ...drawing, id: crypto.randomUUID() }];
+  localStorage.setItem(DRAWINGS_PREFIX + fileId, JSON.stringify(next));
+  return next;
+}
+
+export function removeDrawingLocal(fileId: string, id: string): Drawing[] {
+  const next = getDrawings(fileId).filter((d) => d.id !== id);
+  localStorage.setItem(DRAWINGS_PREFIX + fileId, JSON.stringify(next));
+  return next;
+}
+
+export function clearPageDrawingsLocal(fileId: string, page: number): Drawing[] {
+  const next = getDrawings(fileId).filter((d) => d.pageNumber !== page);
+  localStorage.setItem(DRAWINGS_PREFIX + fileId, JSON.stringify(next));
   return next;
 }

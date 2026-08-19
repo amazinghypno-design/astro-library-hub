@@ -14,6 +14,14 @@ export interface PdfInspection {
 
 const MAX_PAGES_FOR_FULL_TEXT = 400;
 
+// Some malformed/scanned PDFs decode to text containing literal null bytes
+// (a pdf-parse/pdf.js quirk with certain broken glyph mappings) — Postgres
+// text columns reject those outright ("invalid byte sequence for encoding
+// UTF8"), so every string pulled out of the PDF is scrubbed before use.
+function stripNullBytes<T extends string | undefined>(value: T): T {
+  return (value == null ? value : (value.replace(/\u0000/g, "") as T)) as T;
+}
+
 export async function inspectPdf(buffer: Buffer): Promise<PdfInspection> {
   const parser = new PDFParse({ data: buffer });
   try {
@@ -30,10 +38,10 @@ export async function inspectPdf(buffer: Buffer): Promise<PdfInspection> {
       : undefined;
 
     return {
-      embeddedTitle: info.info?.Title,
-      embeddedAuthor: info.info?.Author,
-      firstPageText: firstPage.getPageText(1) ?? "",
-      fullText: fullTextResult.text,
+      embeddedTitle: stripNullBytes(info.info?.Title),
+      embeddedAuthor: stripNullBytes(info.info?.Author),
+      firstPageText: stripNullBytes(firstPage.getPageText(1) ?? ""),
+      fullText: stripNullBytes(fullTextResult.text),
       pageCount,
       pageOrientation,
     };

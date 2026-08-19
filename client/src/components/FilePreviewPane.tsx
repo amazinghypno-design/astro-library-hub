@@ -11,6 +11,7 @@ export default function FilePreviewPane({
   sheets,
   fileId,
   pageOffset,
+  title,
 }: {
   capability: string;
   previewUrl?: string;
@@ -20,6 +21,7 @@ export default function FilePreviewPane({
   sheets?: { name: string; html: string }[];
   fileId?: string;
   pageOffset?: number;
+  title?: string;
 }) {
   if (capability === "unsupported" || capability === "download-fallback") {
     return (
@@ -36,7 +38,7 @@ export default function FilePreviewPane({
     // browser's native <embed>/<iframe> PDF viewer — that was unreliable in
     // practice (verified: a real 145-page scanned PDF rendered as a plain
     // black box in real desktop Chrome, with no visible error).
-    return <PdfReader url={previewUrl} fileId={fileId} pageOffset={pageOffset} />;
+    return <PdfReader url={previewUrl} fileId={fileId} pageOffset={pageOffset} title={title} />;
   }
   if (capability === "image-inline") {
     if (isError || !previewUrl) return <PreviewError />;

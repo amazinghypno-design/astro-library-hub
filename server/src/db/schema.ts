@@ -11,6 +11,7 @@ import {
   index,
   varchar,
   json,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 
 export const userRoleEnum = pgEnum("user_role", ["admin", "user"]);
@@ -28,6 +29,7 @@ export const documentTypeEnum = pgEnum("document_type", [
   "poster",
   "other",
 ]);
+export const drawingToolEnum = pgEnum("drawing_tool", ["pen", "highlighter"]);
 
 export const users = pgTable("users", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -135,6 +137,25 @@ export const highlights = pgTable("highlights", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   userFileIdx: index("highlights_user_file_idx").on(table.userId, table.fileId),
+}));
+
+// Freehand strokes (pen or stylus) drawn directly on a page — same
+// account-scoped/anonymous-local split as bookmarks/highlights. points and
+// strokeWidth are both fractions (0-1) of the page's rendered box, not
+// pixels, so a stroke stays the right size and position across zoom levels
+// and screen sizes exactly like highlight rects do.
+export const drawings = pgTable("drawings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  fileId: uuid("file_id").notNull().references(() => libraryFiles.id, { onDelete: "cascade" }),
+  pageNumber: integer("page_number").notNull(),
+  tool: drawingToolEnum("tool").notNull(),
+  color: text("color").notNull(),
+  strokeWidth: doublePrecision("stroke_width").notNull(),
+  points: jsonb("points").$type<{ x: number; y: number }[]>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  userFileIdx: index("drawings_user_file_idx").on(table.userId, table.fileId),
 }));
 
 export const shareLinks = pgTable("share_links", {

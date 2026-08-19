@@ -68,6 +68,7 @@ export default function FileDetail() {
           sheets={previewHtmlQuery.data?.sheets ?? undefined}
           fileId={file.id}
           pageOffset={file.pageOffset}
+          title={file.title}
         />
       </div>
 

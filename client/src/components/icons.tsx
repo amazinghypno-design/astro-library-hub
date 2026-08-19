@@ -216,6 +216,33 @@ export function IconHighlighter(props: IconProps) {
   );
 }
 
+export function IconCamera(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3.5 8.5a1.5 1.5 0 0 1 1.5-1.5h2l1.2-1.8a1.5 1.5 0 0 1 1.25-.7h5.1a1.5 1.5 0 0 1 1.25.7L17 7h2a1.5 1.5 0 0 1 1.5 1.5V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18Z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </svg>
+  );
+}
+
+export function IconPen(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 20l.9-3.8L15.5 5.6a1.8 1.8 0 0 1 2.5 0l.4.4a1.8 1.8 0 0 1 0 2.5L8 19.1 4 20Z" />
+      <path d="M14 7 17 10" />
+    </svg>
+  );
+}
+
+export function IconUndo(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4.5 9.5H12a5.5 5.5 0 1 1 0 11h-2" />
+      <path d="M8 5.5 4.5 9.5 8 13.5" />
+    </svg>
+  );
+}
+
 export function IconFolderOpen(props: IconProps) {
   return (
     <svg {...base} {...props}>
