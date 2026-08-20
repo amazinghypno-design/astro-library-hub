@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "../lib/trpc";
+import { toThaiErrorMessage } from "../lib/errorMessages";
 
 interface ChatTurn {
   question: string;
@@ -27,10 +28,11 @@ export default function BookChatPanel({ fileId, hasText }: { fileId: string; has
         copy[copy.length - 1] = { question: q, answer, error: null };
         return copy;
       });
-    } catch {
+    } catch (err) {
+      const message = toThaiErrorMessage(err, "ถามไม่สำเร็จ ลองอีกครั้งนะครับ");
       setTurns((t) => {
         const copy = [...t];
-        copy[copy.length - 1] = { question: q, answer: null, error: "ถามไม่สำเร็จ ลองอีกครั้งนะครับ" };
+        copy[copy.length - 1] = { question: q, answer: null, error: message };
         return copy;
       });
     }

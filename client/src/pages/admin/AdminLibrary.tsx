@@ -4,6 +4,7 @@ import { trpc } from "../../lib/trpc";
 import { uploadFileDirect, type PreparedDirectUpload, type UploadProgress, type UploadStage } from "../../lib/upload";
 import { IconEdit, IconPlus, IconTrash, IconUpload } from "../../components/icons";
 import { explainAdminError } from "../../lib/explainAdminError";
+import { toThaiErrorMessage } from "../../lib/errorMessages";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { takePendingUploadFile } from "../../lib/pendingUpload";
 import { slugify } from "../../lib/slugify";
@@ -75,10 +76,7 @@ function AdminLibraryInner() {
       setNewCategoryName("");
       setNewCategoryOpen(false);
     },
-    onError: (err) => {
-      if (err.message !== "CATEGORY_SLUG_EXISTS") alert(explainAdminError(err));
-      else alert("มีหมวดหมู่ชื่อนี้อยู่แล้ว ลองใช้ชื่ออื่น");
-    },
+    onError: (err) => alert(explainAdminError(err)),
   });
 
   function submitNewCategory() {
@@ -110,7 +108,7 @@ function AdminLibraryInner() {
       if (err.message === "DUPLICATE_FILE" && cause?.cause) {
         setErrorMessage(`ไฟล์นี้ซ้ำกับ "${cause.cause.existingTitle}" (${cause.cause.existingFileName}) ที่มีอยู่แล้วในหมวดนี้`);
       } else {
-        setErrorMessage(err.message);
+        setErrorMessage(toThaiErrorMessage(err, "บันทึกไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"));
       }
     },
   });
@@ -241,7 +239,7 @@ function AdminLibraryInner() {
       }
     } catch (err) {
       setStage("failed");
-      setErrorMessage(err instanceof Error ? err.message : "อัปโหลดไม่สำเร็จ");
+      setErrorMessage(toThaiErrorMessage(err, "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"));
     }
   }
 
@@ -270,7 +268,7 @@ function AdminLibraryInner() {
       });
     } catch (err) {
       setStage("failed");
-      setErrorMessage(err instanceof Error ? err.message : "บันทึกไม่สำเร็จ");
+      setErrorMessage(toThaiErrorMessage(err, "บันทึกไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"));
     }
   }
 

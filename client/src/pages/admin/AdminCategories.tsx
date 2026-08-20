@@ -20,9 +20,8 @@ function AdminCategoriesInner() {
       await utils.library.categories.invalidate();
       await utils.library.dashboard.invalidate();
     },
-    onError: (err) => {
-      if (err.message !== "CATEGORY_SLUG_EXISTS") alert(explainAdminError(err));
-    },
+    // No alert here: the failure is rendered inline under the form (below),
+    // which is where the person is already looking after pressing submit.
   });
 
   const deleteCategory = trpc.admin.deleteCategory.useMutation({
@@ -61,7 +60,9 @@ function AdminCategoriesInner() {
           </label>
           <input id="cat-desc" value={description} onChange={(e) => setDescription(e.target.value)} className="input-field" />
         </div>
-        {create.isError && <div className="text-red-700 text-sm">ชื่อหรือ slug นี้มีอยู่แล้ว ลองใช้ชื่ออื่น</div>}
+        {create.error && (
+          <div className="text-red-700 text-sm">{explainAdminError(create.error)}</div>
+        )}
         <button type="submit" disabled={create.isLoading || !name.trim()} className="btn-primary">
           {create.isLoading ? "กำลังบันทึก..." : "เพิ่มหมวดหมู่"}
         </button>

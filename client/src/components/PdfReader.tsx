@@ -3,6 +3,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { IconBookmark, IconCamera, IconChevronLeft, IconChevronRight, IconHighlighter, IconPen, IconTrash, IconUndo } from "./icons";
+import { toThaiPdfErrorMessage } from "../lib/errorMessages";
 import {
   addDrawingLocal,
   addHighlightLocal,
@@ -149,7 +150,7 @@ export default function PdfReader({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setErrorDetail(err instanceof Error ? err.message : String(err));
+        setErrorDetail(toThaiPdfErrorMessage(err));
         setStatus("error");
       });
     return () => {
@@ -540,7 +541,7 @@ export default function PdfReader({
     return (
       <div className="rounded-2xl overflow-hidden border border-navy-900/[0.07] shadow-card">
         <div className="flex flex-col items-center justify-center h-[400px] gap-3 text-center px-6 bg-white">
-          <div className="text-red-700">ไม่สามารถแสดงตัวอย่าง PDF ได้ ({errorDetail || "unknown error"})</div>
+          <div className="text-red-700">{errorDetail || "เปิดไฟล์ PDF ไม่สำเร็จ กรุณารีเฟรชหน้าแล้วลองใหม่อีกครั้ง"}</div>
           {downloadUrl && (
             <a href={downloadUrl} className="text-gold-700 hover:underline text-sm font-medium">
               ดาวน์โหลดไฟล์แทน

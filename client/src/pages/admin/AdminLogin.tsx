@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { trpc } from "../../lib/trpc";
 import { IconLock } from "../../components/icons";
+import { toThaiErrorMessage } from "../../lib/errorMessages";
 
 export default function AdminLogin() {
   const navigate = useNavigate();
@@ -48,7 +49,11 @@ export default function AdminLogin() {
             className="input-field"
           />
         </div>
-        {login.isError && <div className="text-red-700 text-sm">อีเมลหรือรหัสผ่านไม่ถูกต้อง</div>}
+        {login.error && (
+          <div className="text-red-700 text-sm">
+            {toThaiErrorMessage(login.error, "เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง")}
+          </div>
+        )}
         <button type="submit" disabled={login.isLoading} className="btn-primary w-full">
           {login.isLoading ? "กำลังเข้าสู่ระบบ..." : "เข้าสู่ระบบ"}
         </button>
