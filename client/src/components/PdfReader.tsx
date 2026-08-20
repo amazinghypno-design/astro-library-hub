@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { IconBookmark, IconCamera, IconChevronLeft, IconChevronRight, IconHighlighter, IconPen, IconTrash, IconUndo } from "./icons";
+import { IconBookmark, IconCamera, IconChevronLeft, IconChevronRight, IconCollapse, IconExpand, IconHighlighter, IconPen, IconTrash, IconUndo } from "./icons";
 import { toThaiPdfErrorMessage } from "../lib/errorMessages";
 import { safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
+import { useReaderFullscreen } from "../lib/useReaderFullscreen";
+import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
+import RotateDeviceOverlay from "./RotateDeviceOverlay";
+import LandscapeDocumentHint from "./LandscapeDocumentHint";
 import {
   addDrawingLocal,
   addHighlightLocal,
@@ -82,6 +86,7 @@ export default function PdfReader({
   title?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
   const initializedProgressRef = useRef(false);
   const [numPages, setNumPages] = useState<number | null>(null);
@@ -191,6 +196,30 @@ export default function PdfReader({
     }
   }, [fileId, status, currentPage, isLoggedIn]);
 
+  // A page wider than it is tall — slides, wide scans — is the case that reads
+  // badly on a phone held upright, and the one worth asking to rotate for.
+  const isLandscapeDocument = defaultAspect < 1;
+  const {
+    isFullscreen,
+    toggle: toggleFullscreen,
+    enter: enterFullscreen,
+    exit: exitFullscreen,
+  } = useReaderFullscreen(containerRef, {
+    preferLandscape: isLandscapeDocument,
+  });
+  const orientation = useOrientation();
+  const isTouchDevice = useIsTouchDevice();
+  const [rotateHintDismissed, setRotateHintDismissed] = useState(false);
+  const showRotateHint =
+    isFullscreen && isTouchDevice && isLandscapeDocument && orientation === "portrait" && !rotateHintDismissed;
+  const showLandscapeHint = !isFullscreen && isTouchDevice && isLandscapeDocument;
+
+  // Offer the hint again next time: a reader who dismissed it once while
+  // standing on a train may well want it on the next document.
+  useEffect(() => {
+    if (!isFullscreen) setRotateHintDismissed(false);
+  }, [isFullscreen]);
+
   useEffect(() => {
     if (status !== "ready" || !scrollRef.current) return;
     const el = scrollRef.current;
@@ -198,14 +227,36 @@ export default function PdfReader({
     // page-1 aspect once the PDF loads — landscape files (height < width,
     // aspect < 1) get the wider stage from that point on.
     const maxWidth = defaultAspect < 1 ? MAX_WIDTH_LANDSCAPE : MAX_WIDTH_PORTRAIT;
-    const update = () => setFitWidth(Math.min(el.clientWidth - 32, maxWidth));
+    const update = () => {
+      const availableWidth = el.clientWidth - 32;
+      if (!isFullscreen) {
+        setFitWidth(Math.min(availableWidth, maxWidth));
+        return;
+      }
+      // Fullscreen fills the screen, so the desktop max widths do not apply.
+      //
+      // Whether height also constrains depends on the page's shape. A landscape
+      // page is the case fullscreen exists for: fit it whole, so nothing hangs
+      // off the bottom. A portrait page fitted whole on a phone held sideways
+      // would shrink to a third of the screen's width and be unreadable — for
+      // those, filling the width and scrolling down is how reading actually
+      // works, and is what every reader app does.
+      const availableHeight = el.clientHeight - 32;
+      const widthThatFitsHeight = availableHeight / defaultAspect;
+      setFitWidth(
+        isLandscapeDocument ? Math.max(120, Math.min(availableWidth, widthThatFitsHeight)) : availableWidth,
+      );
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [status, defaultAspect]);
+    // See the note in OfficePreview: rotation is a first-class trigger here,
+    // not just whatever resize event the browser happens to emit.
+  }, [status, defaultAspect, isFullscreen, isLandscapeDocument, orientation]);
 
   const pageWidth = Math.round(fitWidth * zoomLevel);
+
 
   useEffect(() => {
     zoomLevelRef.current = zoomLevel;
@@ -549,7 +600,17 @@ export default function PdfReader({
   }
 
   return (
-    <div className="rounded-2xl overflow-hidden border border-navy-900/[0.07] shadow-card">
+    <div
+      ref={containerRef}
+      className={
+        isFullscreen
+          ? // 100dvh, not 100vh: on iOS and Android the visible viewport shrinks
+            // as the browser's own bars appear, and vh keeps reporting the taller
+            // figure — which puts the reader's bottom toolbar underneath them.
+            "reader-fullscreen fixed inset-0 z-50 flex flex-col bg-navy-950 overflow-hidden h-[100dvh]"
+          : "relative rounded-2xl overflow-hidden border border-navy-900/[0.07] shadow-card"
+      }
+    >
       {resumeBanner != null && (
         <div className="flex items-center justify-between gap-3 px-5 py-3 bg-gradient-to-r from-gold-400/15 to-gold-400/5 border-b border-gold-500/20 text-sm">
           <span className="text-navy-800 inline-flex items-center gap-2">
@@ -578,7 +639,11 @@ export default function PdfReader({
           </div>
         </div>
       )}
-      <div ref={scrollRef} className="overflow-auto max-h-[70vh] p-4 sm:p-6 bg-navy-900/[0.03]">
+      {showLandscapeHint && <LandscapeDocumentHint onOpenFullscreen={enterFullscreen} />}
+      <div
+        ref={scrollRef}
+        className={`overflow-auto bg-navy-900/[0.03] ${isFullscreen ? "flex-1 min-h-0 p-2 sm:p-4" : "max-h-[70vh] p-4 sm:p-6"}`}
+      >
         <div style={pinchScale !== 1 ? { transform: `scale(${pinchScale})`, transformOrigin: "top center" } : undefined}>
           {docRef.current &&
             numPages &&
@@ -643,7 +708,26 @@ export default function PdfReader({
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 py-2.5 px-3 bg-white border-t border-navy-900/[0.06] text-sm">
+      <div
+        className={`reader-toolbar flex flex-wrap items-center justify-center gap-2 sm:gap-3 py-2.5 px-3 bg-white border-t border-navy-900/[0.06] text-sm ${
+          isFullscreen ? "shrink-0" : ""
+        }`}
+        style={isFullscreen ? { paddingBottom: "max(0.625rem, env(safe-area-inset-bottom))" } : undefined}
+      >
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          title={isFullscreen ? "ออกจากโหมดเต็มจอ" : "ดูแบบเต็มจอ"}
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors ${
+            isFullscreen
+              ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
+              : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
+          }`}
+        >
+          {isFullscreen ? <IconCollapse width={15} height={15} /> : <IconExpand width={15} height={15} />}
+          <span className="reader-label">{isFullscreen ? "ออกเต็มจอ" : "เต็มจอ"}</span>
+        </button>
+        <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -674,7 +758,7 @@ export default function PdfReader({
         </div>
         {fileId && (
           <>
-            <span className="w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+            <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
             <button
               type="button"
               onClick={() => setDrawToolbarOpen((v) => !v)}
@@ -685,11 +769,11 @@ export default function PdfReader({
               }`}
             >
               <IconPen width={14} height={14} />
-              เครื่องมือวาด
+              <span className="reader-label">เครื่องมือวาด</span>
             </button>
           </>
         )}
-        <span className="w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+        <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
         <button
           type="button"
           onClick={() => capturePage(currentPage)}
@@ -698,11 +782,11 @@ export default function PdfReader({
           className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40 transition-colors"
         >
           <IconCamera width={15} height={15} />
-          {capturingPage ? "กำลังแคป..." : "แคปหน้านี้"}
+          <span className="reader-label">{capturingPage ? "กำลังแคป..." : "แคปหน้านี้"}</span>
         </button>
-        <span className="w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+        <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
         <form onSubmit={onJumpSubmit} className="flex items-center gap-1.5">
-          <label htmlFor="pdf-jump-input" className="text-navy-700/55 text-xs sm:text-sm">
+          <label htmlFor="pdf-jump-input" className="reader-label text-navy-700/55 text-xs sm:text-sm">
             ไปหน้า (สารบัญ)
           </label>
           <input
@@ -723,7 +807,7 @@ export default function PdfReader({
 
         {fileId && (
           <>
-            <span className="w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+            <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
             <button
               type="button"
               onClick={onToggleBookmark}
@@ -734,7 +818,7 @@ export default function PdfReader({
               }`}
             >
               <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
-              {isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}
+              <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
             </button>
             {bookmarks.length > 0 && (
               <div className="relative">
@@ -895,6 +979,10 @@ export default function PdfReader({
             <IconTrash width={14} height={14} /> ล้างหน้านี้
           </button>
         </div>
+      )}
+
+      {showRotateHint && (
+        <RotateDeviceOverlay onDismiss={() => setRotateHintDismissed(true)} onExitFullscreen={exitFullscreen} />
       )}
     </div>
   );

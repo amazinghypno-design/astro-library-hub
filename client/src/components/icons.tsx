@@ -117,6 +117,29 @@ export function IconExpand(props: IconProps) {
   );
 }
 
+export function IconCollapse(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4.5 9H9V4.5" />
+      <path d="M19.5 9H15V4.5" />
+      <path d="M9 19.5V15H4.5" />
+      <path d="M15 19.5V15h4.5" />
+    </svg>
+  );
+}
+
+/** A phone turning on its side — the rotate-your-device prompt. */
+export function IconRotateDevice(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="7" y="2.5" width="10" height="19" rx="2" />
+      <path d="M10.5 19h3" />
+      <path d="M3 12a9 9 0 0 1 2.2-5.9" />
+      <path d="M2.5 9.4 3 12.2l2.8-.6" />
+    </svg>
+  );
+}
+
 export function IconTrash(props: IconProps) {
   return (
     <svg {...base} {...props}>

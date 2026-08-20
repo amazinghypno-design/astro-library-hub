@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { IconBookmark, IconCamera, IconHighlighter, IconPen, IconSearch, IconTrash, IconUndo } from "./icons";
+import { IconBookmark, IconCamera, IconCollapse, IconExpand, IconHighlighter, IconPen, IconSearch, IconTrash, IconUndo } from "./icons";
 import { clearHighlights, focusMatch, highlightMatches } from "../lib/searchInPreview";
 import { renderElementRegionToCanvas } from "../lib/elementToPng";
+import { useReaderFullscreen } from "../lib/useReaderFullscreen";
+import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
+import RotateDeviceOverlay from "./RotateDeviceOverlay";
+import LandscapeDocumentHint from "./LandscapeDocumentHint";
 import { safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
 import {
   addDrawingLocal,
@@ -35,6 +39,10 @@ const STAGE_WIDTH_LANDSCAPE = 1180;
 const A4_RATIO = 297 / 210;
 
 const MIN_ZOOM = 0.5;
+// Fitting a 1180px landscape stage onto a phone held upright needs about 0.3,
+// well under the floor that makes sense for the manual zoom buttons — so the
+// automatic fit gets its own, lower floor.
+const MIN_ZOOM_FIT = 0.15;
 const MAX_ZOOM = 2.5;
 const ZOOM_STEP = 0.25;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
@@ -69,6 +77,7 @@ export default function OfficePreview(props: OfficePreviewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const drawCanvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const [zoom, setZoom] = useState(1);
   const [contentHeight, setContentHeight] = useState(0);
@@ -89,8 +98,31 @@ export default function OfficePreview(props: OfficePreviewProps) {
   const [currentMatch, setCurrentMatch] = useState(0);
 
   const stageWidth = props.kind === "xlsx" || needsWideStage ? STAGE_WIDTH_LANDSCAPE : STAGE_WIDTH_PORTRAIT;
-  const virtualPageHeight = Math.round(stageWidth * A4_RATIO);
+  const isLandscapeDocument = stageWidth === STAGE_WIDTH_LANDSCAPE;
+  // A landscape document's page is wider than it is tall. Deriving its height
+  // by multiplying by the A4 ratio (correct for a portrait page) produced a
+  // page taller than the portrait one, which no landscape screen could ever
+  // fit — the exact thing rotating the phone is supposed to achieve.
+  const virtualPageHeight = Math.round(isLandscapeDocument ? stageWidth / A4_RATIO : stageWidth * A4_RATIO);
   const pageCount = Math.max(1, Math.ceil(contentHeight / virtualPageHeight));
+  const {
+    isFullscreen,
+    toggle: toggleFullscreen,
+    enter: enterFullscreen,
+    exit: exitFullscreen,
+  } = useReaderFullscreen(containerRef, {
+    preferLandscape: isLandscapeDocument,
+  });
+  const orientation = useOrientation();
+  const isTouchDevice = useIsTouchDevice();
+  const [rotateHintDismissed, setRotateHintDismissed] = useState(false);
+  const showRotateHint =
+    isFullscreen && isTouchDevice && isLandscapeDocument && orientation === "portrait" && !rotateHintDismissed;
+  const showLandscapeHint = !isFullscreen && isTouchDevice && isLandscapeDocument;
+
+  useEffect(() => {
+    if (!isFullscreen) setRotateHintDismissed(false);
+  }, [isFullscreen]);
 
   // --- sizing -------------------------------------------------------------
 
@@ -110,6 +142,43 @@ export default function OfficePreview(props: OfficePreviewProps) {
     observer.observe(el);
     return () => observer.disconnect();
   }, [html, stageWidth]);
+
+  // Fullscreen exists to show one whole page at once, so the zoom is chosen to
+  // fit the page rather than left at whatever the reader last set. Re-fitting
+  // on every resize is what makes turning the phone sideways do the thing the
+  // rotate prompt promised: the page grows to fill the new shape.
+  //
+  // A manual zoom after that is respected until the next resize — someone who
+  // zoomed in to read small print should not have it snatched back, but a
+  // rotation is a clear "re-lay this out" signal.
+  const manuallyZoomedRef = useRef(false);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !isFullscreen || contentHeight === 0) return;
+    const fitPage = () => {
+      manuallyZoomedRef.current = false;
+      const availableWidth = el.clientWidth - 32;
+      const availableHeight = el.clientHeight - 32;
+      // Only a landscape document is fitted whole. Squeezing a portrait page
+      // into a sideways phone by its height would leave the text a third of
+      // its readable size; those fill the width and scroll, as reading does.
+      const scale = isLandscapeDocument
+        ? Math.min(availableWidth / stageWidth, availableHeight / virtualPageHeight)
+        : availableWidth / stageWidth;
+      setZoom(Math.max(MIN_ZOOM_FIT, Math.min(MAX_ZOOM, Math.round(scale * 100) / 100)));
+    };
+    fitPage();
+    const observer = new ResizeObserver(() => {
+      if (!manuallyZoomedRef.current) fitPage();
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+    // `orientation` is a dependency as well as a ResizeObserver trigger: the
+    // observer covers the container changing shape, but re-running on the
+    // rotation itself is what guarantees the promise the rotate prompt made,
+    // without depending on which resize signal a given browser chose to send.
+  }, [isFullscreen, contentHeight, stageWidth, virtualPageHeight, isLandscapeDocument, orientation]);
 
   // --- reading position, bookmarks, drawings ------------------------------
 
@@ -160,6 +229,7 @@ export default function OfficePreview(props: OfficePreviewProps) {
     function onWheel(e: WheelEvent) {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
+      manuallyZoomedRef.current = true;
       setZoom((z) => clampZoom(z - Math.sign(e.deltaY) * 0.1));
     }
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -344,10 +414,94 @@ export default function OfficePreview(props: OfficePreviewProps) {
   const toolColors = activeTool === "highlighter" ? HIGHLIGHTER_COLORS : PEN_COLORS;
 
   return (
-    <div>
-      <div className="sticky top-[56px] z-[2] bg-white/95 backdrop-blur border-b border-navy-900/10 px-4 py-3 space-y-2">
-        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-          <div className="relative flex-1">
+    <div
+      ref={containerRef}
+      className={
+        isFullscreen
+          ? // 100dvh rather than 100vh: mobile browsers keep reporting the taller
+            // pre-scroll height for vh, which hides the bottom toolbar behind
+            // their own bars.
+            "reader-fullscreen fixed inset-0 z-50 flex flex-col bg-navy-950 overflow-hidden h-[100dvh]"
+          : "relative"
+      }
+    >
+      {resumePage && (
+        <div className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-gold-500/40 bg-gold-400/5 px-4 py-2.5 text-sm">
+          <span className="text-navy-800">อ่านค้างไว้ที่หน้า {resumePage}</span>
+          <button type="button" onClick={() => goToPage(resumePage)} className="font-medium text-gold-700 underline underline-offset-2 hover:no-underline">
+            อ่านต่อ
+          </button>
+          <button type="button" onClick={() => setResumePage(null)} className="text-navy-700/55 hover:text-navy-900">
+            เริ่มจากต้น
+          </button>
+        </div>
+      )}
+
+      {captureError && <div className="mx-4 mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{captureError}</div>}
+
+      {sheets && sheets.length > 1 && (
+        <div className="reader-tabs flex gap-1 px-4 pt-3 overflow-x-auto border-b border-navy-900/10">
+          {sheets.map((sheet, i) => (
+            <button
+              key={sheet.name}
+              type="button"
+              onClick={() => {
+                setActiveSheet(i);
+                setCurrentPage(1);
+                scrollRef.current?.scrollTo({ top: 0 });
+              }}
+              className={`px-3.5 py-2 text-sm font-medium whitespace-nowrap rounded-t-lg transition-colors ${i === activeSheet ? "bg-gold-400/15 text-gold-700 border-b-2 border-gold-500" : "text-navy-700/60 hover:text-navy-900"}`}
+            >
+              {sheet.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {showLandscapeHint && <LandscapeDocumentHint onOpenFullscreen={enterFullscreen} />}
+
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className={`overflow-auto bg-navy-900/[0.03] px-4 py-4 ${isFullscreen ? "flex-1 min-h-0" : "max-h-[70vh]"}`}
+      >
+        {/* Sizer: gives the scroll container the scaled dimensions, since a
+            CSS transform does not affect layout. */}
+        <div style={{ width: stageWidth * zoom, height: contentHeight * zoom }} className="mx-auto">
+          <div style={{ width: stageWidth, transform: `scale(${zoom})`, transformOrigin: "top left" }} className="relative bg-white shadow-card rounded-lg">
+            <div
+              ref={contentRef}
+              className="office-preview p-8 prose prose-sm max-w-none [&_table]:border-collapse [&_td]:border [&_td]:border-navy-900/15 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-navy-900/15 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-navy-900/5"
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+            <canvas
+              ref={drawCanvasRef}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+              style={{
+                width: stageWidth,
+                height: contentHeight,
+                touchAction: activeTool ? "none" : undefined,
+                pointerEvents: activeTool ? "auto" : "none",
+                cursor: activeTool ? "crosshair" : undefined,
+              }}
+              className="absolute inset-0"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* The controls sit BELOW the document, within thumb reach on a phone
+          and out of the way of the first line of text. In fullscreen they also
+          clear the home indicator via the safe-area inset. */}
+      <div
+        className={`reader-toolbar bg-white border-t border-navy-900/10 px-4 py-3 space-y-2 text-sm ${isFullscreen ? "shrink-0" : ""}`}
+        style={isFullscreen ? { paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" } : undefined}
+      >
+        <div className="reader-row flex flex-col sm:flex-row gap-2 sm:items-center">
+          <div className="reader-search relative flex-1">
             <IconSearch width={15} height={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-navy-700/40" />
             <input
               value={query}
@@ -372,18 +526,38 @@ export default function OfficePreview(props: OfficePreviewProps) {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-sm">
+        <div className="reader-row flex flex-wrap items-center gap-2 text-sm">
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? "ออกจากโหมดเต็มจอ" : "ดูแบบเต็มจอ"}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors ${
+              isFullscreen
+                ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
+                : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
+            }`}
+          >
+            {isFullscreen ? <IconCollapse width={15} height={15} /> : <IconExpand width={15} height={15} />}
+            <span className="reader-label">{isFullscreen ? "ออกเต็มจอ" : "เต็มจอ"}</span>
+          </button>
+          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
           <div className="flex items-center gap-1">
-            <button type="button" onClick={() => setZoom((z) => clampZoom(z - ZOOM_STEP))} disabled={zoom <= MIN_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ย่อ">
+            <button type="button" onClick={() => {
+                manuallyZoomedRef.current = true;
+                setZoom((z) => clampZoom(z - ZOOM_STEP));
+              }} disabled={zoom <= MIN_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ย่อ">
               −
             </button>
             <span className="tabular-nums text-navy-700/70 w-12 text-center">{Math.round(zoom * 100)}%</span>
-            <button type="button" onClick={() => setZoom((z) => clampZoom(z + ZOOM_STEP))} disabled={zoom >= MAX_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ขยาย">
+            <button type="button" onClick={() => {
+                manuallyZoomedRef.current = true;
+                setZoom((z) => clampZoom(z + ZOOM_STEP));
+              }} disabled={zoom >= MAX_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ขยาย">
               +
             </button>
           </div>
 
-          <span className="w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
           <span className="text-navy-700/55 tabular-nums">
             หน้า {currentPage}/{pageCount}
           </span>
@@ -404,13 +578,13 @@ export default function OfficePreview(props: OfficePreviewProps) {
 
           {fileId && (
             <>
-              <span className="w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+              <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
               <button type="button" onClick={() => setDrawToolbarOpen((v) => !v)} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${drawToolbarOpen ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"}`}>
-                <IconPen width={14} height={14} /> เครื่องมือวาด
+                <IconPen width={14} height={14} /> <span className="reader-label">เครื่องมือวาด</span>
               </button>
               <button type="button" onClick={onToggleBookmark} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${isCurrentPageBookmarked ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"}`}>
                 <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
-                {isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}
+                <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
               </button>
               {bookmarks.length > 0 && (
                 <div className="relative">
@@ -440,9 +614,9 @@ export default function OfficePreview(props: OfficePreviewProps) {
             </>
           )}
 
-          <span className="w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
           <button type="button" onClick={captureCurrentPage} disabled={capturing} title="แคปหน้านี้เป็นรูปภาพเพื่อส่งให้คนอื่น" className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40">
-            <IconCamera width={15} height={15} /> {capturing ? "กำลังแคป..." : "แคปหน้านี้"}
+            <IconCamera width={15} height={15} /> <span className="reader-label">{capturing ? "กำลังแคป..." : "แคปหน้านี้"}</span>
           </button>
         </div>
 
@@ -470,67 +644,9 @@ export default function OfficePreview(props: OfficePreviewProps) {
         )}
       </div>
 
-      {resumePage && (
-        <div className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-gold-500/40 bg-gold-400/5 px-4 py-2.5 text-sm">
-          <span className="text-navy-800">อ่านค้างไว้ที่หน้า {resumePage}</span>
-          <button type="button" onClick={() => goToPage(resumePage)} className="font-medium text-gold-700 underline underline-offset-2 hover:no-underline">
-            อ่านต่อ
-          </button>
-          <button type="button" onClick={() => setResumePage(null)} className="text-navy-700/55 hover:text-navy-900">
-            เริ่มจากต้น
-          </button>
-        </div>
+      {showRotateHint && (
+        <RotateDeviceOverlay onDismiss={() => setRotateHintDismissed(true)} onExitFullscreen={exitFullscreen} />
       )}
-
-      {captureError && <div className="mx-4 mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{captureError}</div>}
-
-      {sheets && sheets.length > 1 && (
-        <div className="flex gap-1 px-4 pt-3 overflow-x-auto border-b border-navy-900/10">
-          {sheets.map((sheet, i) => (
-            <button
-              key={sheet.name}
-              type="button"
-              onClick={() => {
-                setActiveSheet(i);
-                setCurrentPage(1);
-                scrollRef.current?.scrollTo({ top: 0 });
-              }}
-              className={`px-3.5 py-2 text-sm font-medium whitespace-nowrap rounded-t-lg transition-colors ${i === activeSheet ? "bg-gold-400/15 text-gold-700 border-b-2 border-gold-500" : "text-navy-700/60 hover:text-navy-900"}`}
-            >
-              {sheet.name}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div ref={scrollRef} onScroll={onScroll} className="overflow-auto max-h-[70vh] bg-navy-900/[0.03] px-4 py-4">
-        {/* Sizer: gives the scroll container the scaled dimensions, since a
-            CSS transform does not affect layout. */}
-        <div style={{ width: stageWidth * zoom, height: contentHeight * zoom }} className="mx-auto">
-          <div style={{ width: stageWidth, transform: `scale(${zoom})`, transformOrigin: "top left" }} className="relative bg-white shadow-card rounded-lg">
-            <div
-              ref={contentRef}
-              className="office-preview p-8 prose prose-sm max-w-none [&_table]:border-collapse [&_td]:border [&_td]:border-navy-900/15 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-navy-900/15 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-navy-900/5"
-              dangerouslySetInnerHTML={{ __html: html }}
-            />
-            <canvas
-              ref={drawCanvasRef}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
-              style={{
-                width: stageWidth,
-                height: contentHeight,
-                touchAction: activeTool ? "none" : undefined,
-                pointerEvents: activeTool ? "auto" : "none",
-                cursor: activeTool ? "crosshair" : undefined,
-              }}
-              className="absolute inset-0"
-            />
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

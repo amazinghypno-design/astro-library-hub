@@ -52,3 +52,82 @@ body {
 .textLayer ::selection {
   background: color-mix(in srgb, #b8862f, transparent 70%);
 }
+
+/* The phone icon in RotateDeviceOverlay tips over and back, showing the
+   gesture being asked for rather than only describing it. Held flat for most
+   of the cycle so it reads as a hint, not a spinner. */
+@keyframes rotate-hint {
+  0%,
+  30% {
+    transform: rotate(0deg);
+  }
+  55%,
+  85% {
+    transform: rotate(-90deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[rotate-hint_2\.4s_ease-in-out_infinite\] {
+    animation: none;
+    transform: rotate(-90deg);
+  }
+}
+
+/* A phone held sideways is about 390px tall. The reader's toolbar, laid out
+   for a comfortable portrait width, wraps to three rows there and swallows two
+   thirds of the screen — leaving less of the page visible than before the
+   reader went fullscreen, which defeats the entire point of rotating.
+   
+   So on a short viewport the fullscreen toolbar collapses to one scrollable
+   row: labels drop away and the icons carry the meaning (every control keeps
+   its title/aria-label, so nothing becomes unreachable or unnamed). Driven by
+   a height media query rather than JavaScript, so it simply follows the device
+   as it turns. */
+@media (max-height: 620px) {
+  .reader-fullscreen .reader-toolbar {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.5rem;
+    overflow-x: auto;
+    padding-top: 0.4rem;
+    padding-bottom: 0.4rem;
+  }
+
+  .reader-fullscreen .reader-toolbar > * {
+    flex: 0 0 auto;
+    margin-top: 0;
+  }
+
+  .reader-fullscreen .reader-toolbar .reader-row {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+
+  .reader-fullscreen .reader-label {
+    display: none;
+  }
+
+  .reader-fullscreen .reader-divider {
+    display: none;
+  }
+
+  .reader-fullscreen .reader-search {
+    width: 9rem;
+  }
+
+  /* Sheet tabs give back another ~20px of page for the same reason. */
+  .reader-fullscreen .reader-tabs {
+    padding-top: 0.25rem;
+  }
+
+  .reader-fullscreen .reader-tabs button {
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+  }
+}
