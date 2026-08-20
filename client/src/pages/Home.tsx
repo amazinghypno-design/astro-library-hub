@@ -61,23 +61,7 @@ export default function Home() {
       {showWakingNotice && <WakingNotice />}
       {refreshingFromCache && <RefreshingNotice />}
       {cacheAfterFailure && <StaleDataNotice onRetry={retryLoad} retrying={dashboardQuery.isFetching} />}
-      <button
-        type="button"
-        onClick={() => navigate("/admin/library")}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setUploadDragOver(true);
-        }}
-        onDragLeave={() => setUploadDragOver(false)}
-        onDrop={onUploadButtonDrop}
-        className={`btn-gold w-full flex items-center justify-center gap-2.5 text-base py-4 rounded-2xl shadow-md transition-shadow ${
-          uploadDragOver ? "ring-4 ring-navy-950/20" : ""
-        }`}
-      >
-        <IconUpload width={22} height={22} /> {uploadDragOver ? "วางไฟล์ที่นี่เพื่ออัปโหลด" : "อัปโหลดไฟล์ใหม่ (ลากไฟล์มาวางได้)"}
-      </button>
-
-      <section className="relative overflow-hidden bg-navy-950 text-ivory rounded-3xl px-6 py-14 sm:px-14 sm:py-20 -mt-2 bg-radial-gold">
+      <section className="relative overflow-hidden bg-navy-950 text-ivory rounded-3xl px-6 py-14 sm:px-14 sm:py-20 bg-radial-gold">
         <div aria-hidden className="absolute inset-0 bg-hero-stars opacity-80" />
         <div aria-hidden className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-gold-500/10 blur-3xl" />
         <div className="relative max-w-2xl">
@@ -104,6 +88,31 @@ export default function Home() {
               ค้นหา
             </button>
           </form>
+          {/* Upload sits under the search box rather than above the hero: it is
+              the second thing a reader reaches for, and up there it pushed the
+              search — the page's actual job — below the fold on a phone. It is
+              outlined so the gold search button stays the loudest thing here,
+              and it is still the drop target for a dragged file. */}
+          <div className="mt-5 flex justify-center">
+            <button
+              type="button"
+              onClick={() => navigate("/admin/library")}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setUploadDragOver(true);
+              }}
+              onDragLeave={() => setUploadDragOver(false)}
+              onDrop={onUploadButtonDrop}
+              className={`inline-flex items-center justify-center gap-2.5 rounded-xl border px-6 py-3 text-base font-medium transition-colors ${
+                uploadDragOver
+                  ? "border-gold-400 bg-gold-400/20 text-gold-400 ring-4 ring-gold-400/20"
+                  : "border-gold-400/50 text-gold-400 hover:bg-gold-400/10 hover:border-gold-400"
+              }`}
+            >
+              <IconUpload width={20} height={20} />
+              {uploadDragOver ? "วางไฟล์ที่นี่เพื่ออัปโหลด" : "อัปโหลดไฟล์ใหม่ (ลากไฟล์มาวางได้)"}
+            </button>
+          </div>
         </div>
       </section>
 
