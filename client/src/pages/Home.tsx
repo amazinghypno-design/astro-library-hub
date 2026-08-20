@@ -109,8 +109,19 @@ export default function Home() {
                   : "border-gold-400/50 text-gold-400 hover:bg-gold-400/10 hover:border-gold-400"
               }`}
             >
-              <IconUpload width={20} height={20} />
-              {uploadDragOver ? "วางไฟล์ที่นี่เพื่ออัปโหลด" : "อัปโหลดไฟล์ใหม่ (ลากไฟล์มาวางได้)"}
+              <IconUpload width={20} height={20} className="shrink-0" />
+              {/* The drag hint is desktop-only advice — there is no dragging a
+                  file on a phone, and spelling it out there only wrapped the
+                  label onto a second line. */}
+              <span className="whitespace-nowrap">
+                {uploadDragOver ? (
+                  "วางไฟล์ที่นี่เพื่ออัปโหลด"
+                ) : (
+                  <>
+                    อัปโหลดไฟล์ใหม่<span className="hidden sm:inline"> (ลากไฟล์มาวางได้)</span>
+                  </>
+                )}
+              </span>
             </button>
           </div>
         </div>
