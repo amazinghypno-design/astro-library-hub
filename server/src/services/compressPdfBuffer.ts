@@ -59,7 +59,10 @@ export async function compressPdfBuffer(
         if (maxDimension && Math.max(dominant.width, dominant.height) > maxDimension) {
           pipeline = pipeline.resize({ width: maxDimension, height: maxDimension, fit: "inside", withoutEnlargement: true });
         }
-        const recompressed = await pipeline.jpeg({ quality, mozjpeg: true }).toBuffer();
+        // Plain libjpeg, not mozjpeg: on half a CPU its extra encode time,
+        // multiplied by every page of a scanned book, costs far more than the
+        // few percent of file size it saves.
+        const recompressed = await pipeline.jpeg({ quality }).toBuffer();
         const embedded = await outDoc.embedJpg(recompressed);
         const page = outDoc.addPage([pageWidthPt, pageHeightPt]);
         page.drawImage(embedded, { x: 0, y: 0, width: pageWidthPt, height: pageHeightPt });

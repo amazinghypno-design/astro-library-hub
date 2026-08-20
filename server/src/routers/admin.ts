@@ -15,8 +15,8 @@ import { storageAdapter } from "../storage/index";
 // admin uploads a PDF, so keeping them out of the boot import graph makes the
 // cold start after the free instance sleeps noticeably shorter for readers.
 const loadPdfMetadata = () => import("../services/pdfMetadata");
-const loadPdfCompressor = () => import("../services/compressPdfBuffer");
 import { fromEmbeddedInfo, fromFirstPageText, mergeSuggestions } from "../domain/metadataExtraction";
+import { enqueuePostUploadProcessing } from "../services/postUploadProcessing";
 import { classifyDocumentType } from "../domain/classifyDocumentType";
 
 const LIMITS = {
@@ -217,56 +217,11 @@ export const adminRouter = router({
       const status: FileStatus = input.status ?? defaultStatusForNewUpload({ hasTitle: true, hasCategoryId: true });
       const visibility = visibilityForStatus(status);
 
-      // Best-effort: extracted text/page count power the page-count display and the
-      // future per-book Q&A (Phase 8c). A malformed PDF must not fail the upload.
-      // Skipped above HEAVY_PROCESSING_MAX_BYTES: on the free hosting tier's
-      // limited RAM, buffering + parsing a very large PDF for text extraction
-      // can exceed available memory and kill the whole request ("Failed to
-      // fetch" client-side, no clean error) — better to save the file with
-      // less metadata than to fail the upload entirely.
-      const HEAVY_PROCESSING_MAX_BYTES = 100 * 1024 * 1024;
-      const skipHeavyProcessing = bytes.byteLength > HEAVY_PROCESSING_MAX_BYTES;
-      let extractedText: string | null = null;
-      let pageCount: number | null = null;
-      let detectedDocumentType = classifyDocumentType(input.mimeType, input.originalName);
-      if (input.mimeType === "application/pdf" && !skipHeavyProcessing) {
-        try {
-          const { inspectPdf } = await loadPdfMetadata();
-          const inspection = await inspectPdf(bytes);
-          extractedText = inspection.fullText;
-          pageCount = inspection.pageCount;
-          detectedDocumentType = classifyDocumentType(input.mimeType, input.originalName, inspection.pageOrientation);
-        } catch {
-          // leave extractedText/pageCount null; detectedDocumentType keeps its orientation-less fallback
-        }
-      }
-      // "poster" is never auto-detected (see domain/classifyDocumentType.ts) — an
-      // explicit admin choice always wins over the heuristic.
-      const documentType = input.documentType ?? detectedDocumentType;
-
-      // A second, recompressed rendition used ONLY by the inline reader, so
-      // opening a heavy scanned PDF doesn't mean streaming the full original
-      // through the browser first. Downloads always serve the untouched
-      // original (storageKey) — this is purely a read-speed optimization.
-      // Best-effort: skipped for small files (not worth it) and never fails
-      // the upload itself if compression errors out. Also skipped above
-      // HEAVY_PROCESSING_MAX_BYTES for the same free-tier memory reason as above.
-      let previewStorageKey: string | null = null;
-      const PREVIEW_WORTHY_MIN_BYTES = 5 * 1024 * 1024;
-      if (input.mimeType === "application/pdf" && !skipHeavyProcessing && bytes.byteLength > PREVIEW_WORTHY_MIN_BYTES) {
-        try {
-          const { compressPdfBuffer } = await loadPdfCompressor();
-          const { bytes: previewBytes } = await compressPdfBuffer(bytes, { quality: 80, maxDimension: 1800 });
-          if (previewBytes.byteLength < bytes.byteLength) {
-            const key = `${input.storageKey}.preview.pdf`;
-            await storageAdapter.put(key, previewBytes, "application/pdf");
-            previewStorageKey = key;
-          }
-        } catch {
-          // leave previewStorageKey null — the reader falls back to the original
-        }
-      }
-
+      // The row is written from what is already known, and nothing else holds
+      // the admin's request open. Text extraction, page count, orientation and
+      // the recompressed reading rendition all run afterwards — see
+      // services/postUploadProcessing.ts for why that is not optional on a
+      // half-CPU instance sitting behind a 100-second edge timeout.
       const [created] = await db
         .insert(libraryFiles)
         .values({
@@ -280,17 +235,23 @@ export const adminRouter = router({
           size: bytes.byteLength,
           checksum: actualChecksum,
           storageKey: input.storageKey,
-          previewStorageKey,
+          previewStorageKey: null,
           tags: input.tags,
-          extractedText,
-          pageCount,
-          documentType,
+          extractedText: null,
+          pageCount: null,
+          // "poster" is never auto-detected (see domain/classifyDocumentType.ts),
+          // so an explicit admin choice always wins. Otherwise this is the
+          // filename/MIME guess, refined once the background pass has read the
+          // real page geometry.
+          documentType: input.documentType ?? classifyDocumentType(input.mimeType, input.originalName),
           status,
           visibility,
           createdBy: ctx.user.id,
           publishedAt: status === "published" ? new Date() : null,
         })
         .returning();
+
+      enqueuePostUploadProcessing(created.id, { documentTypeChosenByAdmin: input.documentType != null });
 
       return created;
     }),
