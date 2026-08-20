@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
 import { IconCategory, IconHome, IconLibrary, IconSearch } from "./icons";
+import LogoMark from "./LogoMark";
 
 const NAV_LINKS = [
   { to: "/", label: "หน้าแรก", Icon: IconHome },
@@ -21,9 +22,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       <header className="bg-navy-950 text-ivory sticky top-0 z-10 shadow-lg shadow-navy-950/10 pt-[env(safe-area-inset-top)]">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
           <Link to="/" className="flex items-center gap-2 shrink-0 group">
-            <span aria-hidden className="text-gold-400 text-xl leading-none transition-transform group-hover:rotate-12">
-              ✦
-            </span>
+            <LogoMark className="text-gold-400 shrink-0 transition-transform group-hover:scale-110" width={30} height={16} />
             <span className="font-serif font-semibold text-base sm:text-xl text-ivory tracking-wide">
               <span className="hidden sm:inline">Astro Library </span>
               <span className="text-gold-400">Hub</span>
