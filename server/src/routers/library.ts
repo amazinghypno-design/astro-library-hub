@@ -8,10 +8,16 @@ import { isShareLinkValid } from "../domain/shareLink";
 import { selectRelevantPassages } from "../domain/passageRetrieval";
 import { router, publicProcedure } from "./trpc";
 import { storageAdapter } from "../storage/index";
+import { getCachedPreview, setCachedPreview } from "../services/previewCache";
 // Loaded on demand (mammoth + xlsx are heavy and only used when someone opens
 // a Word/Excel preview) so they stay out of the boot path — see the same note
 // in routers/admin.ts.
 const loadOfficePreview = () => import("../services/renderOfficePreview");
+
+interface PreviewHtmlResult {
+  html: string | null;
+  sheets: { name: string; html: string }[] | null;
+}
 import { aiAdapter } from "../ai/index";
 
 const PUBLIC_FILTER = and(eq(libraryFiles.status, "published"), eq(libraryFiles.visibility, "public"));
@@ -225,6 +231,14 @@ export const libraryRouter = router({
       throw new TRPCError({ code: "BAD_REQUEST", message: "PREVIEW_UNSUPPORTED" });
     }
 
+    // Uploaded files are immutable, so a rendered preview stays valid for the
+    // life of the process — worth caching, because converting one real 0.9MB
+    // .docx costs ~3.4s on the free instance's half CPU and readers were
+    // paying that on every single open.
+    const cacheKey = `preview:${file.id}`;
+    const cached = getCachedPreview<PreviewHtmlResult>(cacheKey);
+    if (cached) return cached;
+
     let bytes: Buffer;
     try {
       bytes = await storageAdapter.get(file.storageKey);
@@ -234,12 +248,12 @@ export const libraryRouter = router({
 
     try {
       const { renderDocxToHtml, renderXlsxToSheets } = await loadOfficePreview();
-      if (capability === "docx-inline") {
-        const html = await renderDocxToHtml(bytes);
-        return { html, sheets: null };
-      }
-      const sheets = await renderXlsxToSheets(bytes);
-      return { html: null, sheets };
+      const result: PreviewHtmlResult =
+        capability === "docx-inline"
+          ? { html: await renderDocxToHtml(bytes), sheets: null }
+          : { html: null, sheets: await renderXlsxToSheets(bytes) };
+      setCachedPreview(cacheKey, result);
+      return result;
     } catch {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "PREVIEW_RENDER_FAILED" });
     }
