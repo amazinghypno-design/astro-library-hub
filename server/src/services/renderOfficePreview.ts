@@ -16,8 +16,10 @@ import sanitizeHtml from "sanitize-html";
  * every one as a base64 data: URI. On a real document in the library that
  * turned 0.9MB of .docx into 1.25MB of HTML that barely compresses (base64 of
  * already-compressed image data), which is most of what a reader waits for.
- * Re-encoding to a sensible display size costs a little CPU once — and the
- * result is cached (see previewCache.ts) — for a much smaller download.
+ * Re-encoding to a sensible display size costs CPU once — paid at boot by the
+ * warmer in officePreview.ts, and cached after that — for a much smaller
+ * download on every open. Plain libjpeg rather than mozjpeg: mozjpeg's extra
+ * few percent of compression is not worth its encode time on half a CPU.
  *
  * Best-effort: anything sharp cannot decode (Word also embeds WMF/EMF vector
  * blobs) is passed through untouched rather than failing the whole preview.
@@ -31,7 +33,7 @@ const convertImage = mammoth.images.imgElement(async (image) => {
     const resized = await sharp(buffer)
       .rotate()
       .resize({ width: MAX_IMAGE_WIDTH, withoutEnlargement: true })
-      .jpeg({ quality: 72, mozjpeg: true })
+      .jpeg({ quality: 72 })
       .toBuffer();
     if (resized.byteLength < buffer.byteLength) {
       return { src: `data:image/jpeg;base64,${resized.toString("base64")}` };

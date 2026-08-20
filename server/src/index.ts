@@ -14,6 +14,7 @@ import { storageAdapter } from "./storage/index";
 import { buildContentDisposition } from "./domain/safeStorageKey";
 import { isPubliclyVisible } from "./domain/publicationPolicy";
 import { isShareLinkValid } from "./domain/shareLink";
+import { warmOfficePreviewCache } from "./services/officePreview";
 
 const app = express();
 
@@ -175,4 +176,8 @@ process.on("uncaughtException", (err) => {
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
   console.log(`Astro Library Hub server listening on http://localhost:${port}`);
+  // Converting the Office documents takes seconds of CPU that somebody has to
+  // spend; better now, while the port has just opened and nobody is waiting on
+  // a page, than under the first reader who opens one. Fire-and-forget.
+  void warmOfficePreviewCache();
 });
