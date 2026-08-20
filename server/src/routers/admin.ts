@@ -163,7 +163,12 @@ export const adminRouter = router({
         .where(eq(libraryFiles.categoryId, input.categoryId));
       const duplicate = findDuplicate(input.title, input.originalName, input.categoryId, existingFiles);
       if (duplicate) {
-        await storageAdapter.delete(input.storageKey).catch(() => {});
+        // Deliberately NOT deleting the just-uploaded object here — a title/name
+        // collision means this particular save is blocked, not that the uploaded
+        // bytes are bad. The admin's next move is usually to edit the title or
+        // category and press save again with the same prepared upload; deleting
+        // the storage key here used to make that retry fail with
+        // UPLOAD_NOT_FOUND since the file it pointed to no longer existed.
         throw new TRPCError({ code: "CONFLICT", message: "DUPLICATE_FILE", cause: duplicate });
       }
 
