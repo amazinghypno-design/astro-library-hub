@@ -78,7 +78,28 @@ export const adminRouter = router({
   }),
 
   adminFiles: adminProcedure.query(async () => {
-    return db.select().from(libraryFiles);
+    // Same reason as the public lists (see LIST_FILE_COLUMNS in library.ts):
+    // selecting whole rows here shipped every file's extractedText to the
+    // admin page, which is the single heaviest request in the app because it
+    // is not paginated. These are the columns the table actually renders.
+    return db
+      .select({
+        id: libraryFiles.id,
+        title: libraryFiles.title,
+        author: libraryFiles.author,
+        year: libraryFiles.year,
+        categoryId: libraryFiles.categoryId,
+        documentType: libraryFiles.documentType,
+        pageOffset: libraryFiles.pageOffset,
+        status: libraryFiles.status,
+        visibility: libraryFiles.visibility,
+        mimeType: libraryFiles.mimeType,
+        originalName: libraryFiles.originalName,
+        size: libraryFiles.size,
+        createdAt: libraryFiles.createdAt,
+      })
+      .from(libraryFiles)
+      .orderBy(desc(libraryFiles.createdAt));
   }),
 
   /**

@@ -16,6 +16,44 @@ import { aiAdapter } from "../ai/index";
 
 const PUBLIC_FILTER = and(eq(libraryFiles.status, "published"), eq(libraryFiles.visibility, "public"));
 
+/**
+ * Never `select()` a whole library_files row into a response.
+ *
+ * extractedText holds the entire text of a PDF — hundreds of KB per book —
+ * and it dominated every list payload: a 20-file page weighed 825KB over the
+ * wire, of which 98% was text no list view renders. That is what made opening
+ * a category or the catalogue feel slow. storageKey, checksum and createdBy
+ * have no business reaching a public client either.
+ *
+ * These two column sets are the allow-list. Add a column here only when a
+ * view actually renders it.
+ */
+const LIST_FILE_COLUMNS = {
+  id: libraryFiles.id,
+  title: libraryFiles.title,
+  author: libraryFiles.author,
+  year: libraryFiles.year,
+  // Not rendered, but previewCapability() needs it to classify the file.
+  originalName: libraryFiles.originalName,
+  mimeType: libraryFiles.mimeType,
+  documentType: libraryFiles.documentType,
+  categoryId: libraryFiles.categoryId,
+  size: libraryFiles.size,
+  pageCount: libraryFiles.pageCount,
+  createdAt: libraryFiles.createdAt,
+};
+
+const DETAIL_FILE_COLUMNS = {
+  ...LIST_FILE_COLUMNS,
+  description: libraryFiles.description,
+  pageOffset: libraryFiles.pageOffset,
+  tags: libraryFiles.tags,
+  publishedAt: libraryFiles.publishedAt,
+  // The reader only ever asked "is there text to answer questions about?" —
+  // it never displayed the text itself, so send the answer, not the corpus.
+  hasText: sql<boolean>`(${libraryFiles.extractedText} is not null and length(${libraryFiles.extractedText}) > 0)`,
+};
+
 const viewInput = z.union([z.object({ id: z.string().uuid() }), z.object({ token: z.string().min(1) })]);
 
 /**
@@ -132,7 +170,7 @@ export const libraryRouter = router({
 
       const [totalRow] = await db.select({ n: count() }).from(libraryFiles).where(where);
       const files = await db
-        .select()
+        .select(LIST_FILE_COLUMNS)
         .from(libraryFiles)
         .where(where)
         .orderBy(desc(libraryFiles.createdAt))
@@ -148,15 +186,25 @@ export const libraryRouter = router({
     }),
 
   fileById: publicProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ input }) => {
-    const [file] = await db.select().from(libraryFiles).where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
+    const [file] = await db
+      .select(DETAIL_FILE_COLUMNS)
+      .from(libraryFiles)
+      .where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
     if (!file) return null;
     return { ...file, preview: previewCapability(file.mimeType, file.originalName) };
   }),
 
   fileByShareToken: publicProcedure.input(z.object({ token: z.string().min(1) })).query(async ({ input }) => {
+    // resolveViewableFile reads the whole row because previewUrl/download need
+    // storageKey — so the trimming to the public shape happens here instead.
     const file = await resolveViewableFile({ token: input.token });
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "SHARE_LINK_INVALID_OR_EXPIRED" });
-    return { ...file, preview: previewCapability(file.mimeType, file.originalName) };
+    const { extractedText, storageKey, previewStorageKey, checksum, createdBy, status, visibility, updatedAt, ...shared } = file;
+    return {
+      ...shared,
+      hasText: !!extractedText && extractedText.length > 0,
+      preview: previewCapability(file.mimeType, file.originalName),
+    };
   }),
 
   previewUrl: publicProcedure.input(viewInput).query(async ({ input }) => {

@@ -50,11 +50,11 @@ export default function FilePreviewPane({
   }
   if (capability === "docx-inline") {
     if (isError || !html) return <PreviewError />;
-    return <OfficePreview kind="docx" html={html} />;
+    return <OfficePreview kind="docx" html={html} fileId={fileId} title={title} />;
   }
   if (capability === "xlsx-inline") {
     if (isError || !sheets) return <PreviewError />;
-    return <OfficePreview kind="xlsx" sheets={sheets} />;
+    return <OfficePreview kind="xlsx" sheets={sheets} fileId={fileId} title={title} />;
   }
   return null;
 }

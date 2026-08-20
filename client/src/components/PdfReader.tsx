@@ -4,6 +4,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { IconBookmark, IconCamera, IconChevronLeft, IconChevronRight, IconHighlighter, IconPen, IconTrash, IconUndo } from "./icons";
 import { toThaiPdfErrorMessage } from "../lib/errorMessages";
+import { safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
 import {
   addDrawingLocal,
   addHighlightLocal,
@@ -438,28 +439,8 @@ export default function PdfReader({
       if (!blob) throw new Error("CANVAS_EXPORT_FAILED");
 
       const displayPage = Math.max(1, pageNumber - pageOffset);
-      const safeTitle = (title ?? "หน้าหนังสือ").replace(/[\\/:*?"<>|]/g, "").trim();
-      const fileName = `${safeTitle || "หน้าหนังสือ"} - หน้า ${displayPage}.png`;
-      const shareFile = new File([blob], fileName, { type: "image/png" });
-
-      if (navigator.canShare?.({ files: [shareFile] })) {
-        try {
-          await navigator.share({ files: [shareFile], title: title ?? fileName, text: `หน้า ${displayPage} จาก ${title ?? "หนังสือ"}` });
-          return;
-        } catch (err) {
-          if (err instanceof Error && err.name === "AbortError") return; // reader cancelled the share sheet
-          // fall through to download
-        }
-      }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const fileName = `${safeFileName(title ?? "", "หน้าหนังสือ")} - หน้า ${displayPage}.png`;
+      await shareOrSaveImage(blob, fileName, title ?? fileName, `หน้า ${displayPage} จาก ${title ?? "หนังสือ"}`);
     } catch {
       alert("แคปหน้านี้ไม่สำเร็จ ลองอีกครั้ง");
     } finally {
