@@ -37,6 +37,15 @@ const queryClient = new QueryClient({
   },
 });
 
+// Installed to a home screen the app has no address bar to reload from, so the
+// worker is registered after load (never competing with the first paint) and
+// serves pages network-first — see public/sw.js.
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <trpc.Provider client={trpcClient} queryClient={queryClient}>

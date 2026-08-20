@@ -13,9 +13,12 @@ export default function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const isHome = location.pathname === "/";
 
+  // Installed as a home-screen app the page owns the whole screen, notch and
+  // home indicator included, so the bar and the page floor pad themselves out
+  // of the way. Both insets are 0 in a browser tab and on a plain screen.
   return (
-    <div className="min-h-screen flex flex-col bg-ivory">
-      <header className="bg-navy-950 text-ivory sticky top-0 z-10 shadow-lg shadow-navy-950/10">
+    <div className="min-h-screen flex flex-col bg-ivory pb-[env(safe-area-inset-bottom)]">
+      <header className="bg-navy-950 text-ivory sticky top-0 z-10 shadow-lg shadow-navy-950/10 pt-[env(safe-area-inset-top)]">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
           <Link to="/" className="flex items-center gap-2 shrink-0 group">
             <span aria-hidden className="text-gold-400 text-xl leading-none transition-transform group-hover:rotate-12">
