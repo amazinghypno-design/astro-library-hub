@@ -4,14 +4,21 @@
     {
       "name": "astro-library-hub-server",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:server"],
+      "runtimeArgs": [
+        "run",
+        "dev:server"
+      ],
       "port": 4000
     },
     {
       "name": "astro-library-hub-client",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev:client"],
-      "port": 5173
+      "runtimeArgs": [
+        "run",
+        "dev:client"
+      ],
+      "port": 5173,
+      "autoPort": true
     }
   ]
 }

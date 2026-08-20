@@ -23,9 +23,16 @@ const app = express();
 // secure cookies, breaking login in production.
 app.set("trust proxy", 1);
 
+// In production the browser origin is pinned to exactly one host. In
+// development the Vite dev server moves to another port whenever 5173 is
+// taken, and a pinned origin turns that into a wall of opaque CORS failures
+// that look like the API is down — so any loopback origin is accepted there.
+const isProduction = process.env.NODE_ENV === "production";
+const developmentOrigin = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN ?? "http://localhost:5173",
+    origin: isProduction ? (process.env.CLIENT_ORIGIN ?? false) : developmentOrigin,
     credentials: true,
   }),
 );
@@ -58,7 +65,6 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
 // cross-site request, and browsers only attach cookies to those when the
 // cookie is SameSite=None + Secure. Locally both run on http://localhost
 // (same-site), where Secure cookies don't work at all, hence the split.
-const isProd = process.env.NODE_ENV === "production";
 const PgSession = connectPgSimple(session);
 app.use(
   session({
@@ -74,8 +80,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      sameSite: isProd ? "none" : "lax",
-      secure: isProd,
+      sameSite: isProduction ? "none" : "lax",
+      secure: isProduction,
       maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   }),
