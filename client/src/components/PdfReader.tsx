@@ -137,7 +137,12 @@ export default function PdfReader({
     initializedProgressRef.current = false;
     setZoomLevel(1);
     pdfjsLib
-      .getDocument(url)
+      // R2 serves byte ranges, so pdf.js can fetch the pages it is actually
+      // showing instead of the whole book before the first page appears — a
+      // 6 MB scan opens on its first page rather than after 6 MB. Without
+      // disableAutoFetch pdf.js would still pull the rest in the background
+      // and hold the connection while a reader sits on page 1.
+      .getDocument({ url, disableAutoFetch: true, rangeChunkSize: 262144 })
       .promise.then(async (doc) => {
         if (cancelled) return;
         docRef.current = doc;

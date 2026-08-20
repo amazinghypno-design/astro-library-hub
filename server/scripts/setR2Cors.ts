@@ -35,6 +35,12 @@ async function main() {
             AllowedOrigins: ["*"],
             AllowedMethods: ["GET", "HEAD", "PUT"],
             AllowedHeaders: ["*"],
+            // Without these the browser hands JS a response stripped of its
+            // range headers, pdf.js concludes the server cannot do ranges,
+            // and every PDF is downloaded in full before its first page can
+            // be drawn. R2 serves the ranges either way — this is only about
+            // whether the page is allowed to see that it did.
+            ExposeHeaders: ["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type", "ETag"],
             MaxAgeSeconds: 3600,
           },
         ],

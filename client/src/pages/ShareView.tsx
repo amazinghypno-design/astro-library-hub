@@ -8,12 +8,10 @@ export default function ShareView() {
   const { token } = useParams<{ token: string }>();
   const fileQuery = trpc.library.fileByShareToken.useQuery({ token: token! }, { enabled: !!token, retry: false });
   const capability = fileQuery.data?.preview;
-  const needsSignedUrl = capability === "pdf-inline" || capability === "image-inline" || capability === "text-inline";
   const needsRenderedHtml = capability === "docx-inline" || capability === "xlsx-inline";
 
-  const previewQuery = trpc.library.previewUrl.useQuery({ token: token! }, { enabled: !!token && needsSignedUrl });
+  // Links ride along with the metadata — see the same note in FileDetail.
   const previewHtmlQuery = trpc.library.previewHtml.useQuery({ token: token! }, { enabled: !!token && needsRenderedHtml });
-  const downloadQuery = trpc.library.downloadUrl.useQuery({ token: token! }, { enabled: !!token && !!fileQuery.data });
 
   if (fileQuery.isLoading) return <div className="text-navy-700/60 py-12 text-center">กำลังโหลด...</div>;
   if (fileQuery.isError || !fileQuery.data) {
@@ -45,13 +43,11 @@ export default function ShareView() {
       </div>
 
       <div className="flex gap-3">
-        {downloadQuery.data && (
-          <a href={downloadQuery.data.url} className="btn-gold inline-flex items-center gap-2">
-            <IconDownload width={18} height={18} /> ดาวน์โหลด
-          </a>
-        )}
-        {previewQuery.data && (
-          <a href={previewQuery.data.url} target="_blank" rel="noreferrer" className="btn-outline inline-flex items-center gap-2">
+        <a href={file.downloadUrl} className="btn-gold inline-flex items-center gap-2">
+          <IconDownload width={18} height={18} /> ดาวน์โหลด
+        </a>
+        {file.previewUrl && (
+          <a href={file.previewUrl} target="_blank" rel="noreferrer" className="btn-outline inline-flex items-center gap-2">
             <IconExpand width={18} height={18} /> เปิดเต็มหน้าต่าง
           </a>
         )}
@@ -60,9 +56,9 @@ export default function ShareView() {
       <div className="card overflow-hidden min-h-[400px]">
         <FilePreviewPane
           capability={file.preview}
-          previewUrl={previewQuery.data?.url}
-          isLoading={needsSignedUrl ? previewQuery.isLoading : previewHtmlQuery.isLoading}
-          isError={needsSignedUrl ? previewQuery.isError : previewHtmlQuery.isError}
+          previewUrl={file.previewUrl ?? undefined}
+          isLoading={needsRenderedHtml && previewHtmlQuery.isLoading}
+          isError={needsRenderedHtml && previewHtmlQuery.isError}
           html={previewHtmlQuery.data?.html ?? undefined}
           sheets={previewHtmlQuery.data?.sheets ?? undefined}
           fileId={file.id}

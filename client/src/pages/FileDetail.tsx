@@ -11,12 +11,13 @@ export default function FileDetail() {
   const isAdmin = useAdminSession();
   const fileQuery = trpc.library.fileById.useQuery({ id: id! }, { enabled: !!id });
   const capability = fileQuery.data?.preview;
-  const needsSignedUrl = capability === "pdf-inline" || capability === "image-inline" || capability === "text-inline";
   const needsRenderedHtml = capability === "docx-inline" || capability === "xlsx-inline";
 
-  const previewQuery = trpc.library.previewUrl.useQuery({ id: id! }, { enabled: !!id && needsSignedUrl });
+  // The signed preview URL and the download link arrive with the metadata, so
+  // opening a file costs one round-trip rather than two chained ones. Office
+  // files still fetch their rendered HTML separately — that one is real work
+  // on the server, not a link, and only these two formats need it.
   const previewHtmlQuery = trpc.library.previewHtml.useQuery({ id: id! }, { enabled: !!id && needsRenderedHtml });
-  const downloadQuery = trpc.library.downloadUrl.useQuery({ id: id! }, { enabled: !!id && !!fileQuery.data });
 
   if (fileQuery.isLoading) return <div className="text-navy-700/60 py-12 text-center">กำลังโหลด...</div>;
   if (fileQuery.isError) return <div className="text-red-700 py-12 text-center">โหลดข้อมูลไฟล์ไม่สำเร็จ ลองรีเฟรชหน้าอีกครั้ง</div>;
@@ -46,13 +47,11 @@ export default function FileDetail() {
       </div>
 
       <div className="flex gap-3">
-        {downloadQuery.data && (
-          <a href={downloadQuery.data.url} className="btn-gold inline-flex items-center gap-2">
-            <IconDownload width={18} height={18} /> ดาวน์โหลด
-          </a>
-        )}
-        {previewQuery.data && (
-          <a href={previewQuery.data.url} target="_blank" rel="noreferrer" className="btn-outline inline-flex items-center gap-2">
+        <a href={file.downloadUrl} className="btn-gold inline-flex items-center gap-2">
+          <IconDownload width={18} height={18} /> ดาวน์โหลด
+        </a>
+        {file.previewUrl && (
+          <a href={file.previewUrl} target="_blank" rel="noreferrer" className="btn-outline inline-flex items-center gap-2">
             <IconExpand width={18} height={18} /> เปิดเต็มหน้าต่าง
           </a>
         )}
@@ -61,9 +60,9 @@ export default function FileDetail() {
       <div className="card overflow-hidden min-h-[400px]">
         <FilePreviewPane
           capability={file.preview}
-          previewUrl={previewQuery.data?.url}
-          isLoading={needsSignedUrl ? previewQuery.isLoading : previewHtmlQuery.isLoading}
-          isError={needsSignedUrl ? previewQuery.isError : previewHtmlQuery.isError}
+          previewUrl={file.previewUrl ?? undefined}
+          isLoading={needsRenderedHtml && previewHtmlQuery.isLoading}
+          isError={needsRenderedHtml && previewHtmlQuery.isError}
           html={previewHtmlQuery.data?.html ?? undefined}
           sheets={previewHtmlQuery.data?.sheets ?? undefined}
           fileId={file.id}

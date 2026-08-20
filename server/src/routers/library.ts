@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Request } from "express";
 import { and, asc, count, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/client";
 import { libraryCategories, libraryFiles, shareLinks } from "../db/schema";
@@ -70,6 +71,30 @@ async function resolveViewableFile(input: z.infer<typeof viewInput>) {
   }
   const [file] = await db.select().from(libraryFiles).where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
   return file ?? null;
+}
+
+/**
+ * The reader needs three things to show a file: its metadata, a signed URL for
+ * the bytes, and a download link. Asking for them separately cost two serial
+ * round-trips to a free-tier instance — ~1.6s before the first PDF byte was
+ * requested — because the client could only ask for the URL once it knew from
+ * the metadata that the file was previewable. The server already knows that,
+ * and signing an R2 URL is a local HMAC with no network call of its own, so
+ * every detail response carries the links with it.
+ */
+type LinkableFile = Pick<typeof libraryFiles.$inferSelect, "id" | "mimeType" | "originalName" | "storageKey" | "previewStorageKey">;
+
+async function viewLinks(file: LinkableFile, req: Request, token?: string) {
+  const capability = previewCapability(file.mimeType, file.originalName);
+  const inlineFromStorage = capability === "pdf-inline" || capability === "image-inline" || capability === "text-inline";
+  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : "";
+  return {
+    preview: capability,
+    // Prefer the recompressed, faster-loading rendition when one exists —
+    // downloads always use storageKey, the untouched original.
+    previewUrl: inlineFromStorage ? await storageAdapter.createPreviewUrl(file.previewStorageKey ?? file.storageKey) : null,
+    downloadUrl: `${req.protocol}://${req.get("host")}/download/${file.id}${tokenQuery}`,
+  };
 }
 
 export const libraryRouter = router({
@@ -183,16 +208,17 @@ export const libraryRouter = router({
       };
     }),
 
-  fileById: publicProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ input }) => {
+  fileById: publicProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ input, ctx }) => {
     const [file] = await db
-      .select(DETAIL_FILE_COLUMNS)
+      .select({ ...DETAIL_FILE_COLUMNS, storageKey: libraryFiles.storageKey, previewStorageKey: libraryFiles.previewStorageKey })
       .from(libraryFiles)
       .where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
     if (!file) return null;
-    return { ...file, preview: previewCapability(file.mimeType, file.originalName) };
+    const { storageKey, previewStorageKey, ...shared } = file;
+    return { ...shared, ...(await viewLinks(file, ctx.req)) };
   }),
 
-  fileByShareToken: publicProcedure.input(z.object({ token: z.string().min(1) })).query(async ({ input }) => {
+  fileByShareToken: publicProcedure.input(z.object({ token: z.string().min(1) })).query(async ({ input, ctx }) => {
     // resolveViewableFile reads the whole row because previewUrl/download need
     // storageKey — so the trimming to the public shape happens here instead.
     const file = await resolveViewableFile({ token: input.token });
@@ -201,7 +227,7 @@ export const libraryRouter = router({
     return {
       ...shared,
       hasText: !!extractedText && extractedText.length > 0,
-      preview: previewCapability(file.mimeType, file.originalName),
+      ...(await viewLinks(file, ctx.req, input.token)),
     };
   }),
 

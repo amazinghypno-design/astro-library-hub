@@ -1,4 +1,5 @@
 import { Link, useNavigate } from "react-router-dom";
+import { trpc } from "../lib/trpc";
 import { fileTypeIcon } from "../lib/fileTypeIcon";
 import FileCardActions from "./FileCardActions";
 
@@ -19,7 +20,21 @@ interface FileCardFile {
  */
 export default function FileCard({ file }: { file: FileCardFile }) {
   const navigate = useNavigate();
+  const utils = trpc.useUtils();
   const Icon = fileTypeIcon(file.documentType);
+
+  // A pointer resting on the card, or a finger landing on it, is a reliable
+  // signal the file is about to be opened — and the answer takes the better
+  // part of a second to come back from a sleepy free-tier API. Starting the
+  // request here means it is usually already in the cache by the time the
+  // click lands, and the reader's file page opens with no wait at all. The
+  // response is cached by React Query, so an unused prefetch costs one
+  // request and nothing else.
+  const prefetch = () => {
+    void utils.library.fileById.prefetch({ id: file.id });
+    // The reader's code is a separate chunk; pull it in alongside the data.
+    void import("../pages/FileDetail");
+  };
 
   return (
     <div
@@ -29,6 +44,9 @@ export default function FileCard({ file }: { file: FileCardFile }) {
       onKeyDown={(e) => {
         if (e.key === "Enter") navigate(`/file/${file.id}`);
       }}
+      onMouseEnter={prefetch}
+      onTouchStart={prefetch}
+      onFocus={prefetch}
       className="card-interactive p-4 flex items-start gap-3 cursor-pointer"
     >
       <Icon width={20} height={20} className="text-gold-600 shrink-0 mt-0.5" />
