@@ -61,7 +61,13 @@ const isProd = process.env.NODE_ENV === "production";
 const PgSession = connectPgSimple(session);
 app.use(
   session({
-    store: new PgSession({ conString: process.env.DATABASE_URL, tableName: "session", createTableIfMissing: true }),
+    store: new PgSession({
+      // Its own pool, separate from db/client.ts — capped for the same reason
+      // (see the note there). Session reads are one small query per request.
+      conObject: { connectionString: process.env.DATABASE_URL, max: 2 },
+      tableName: "session",
+      createTableIfMissing: true,
+    }),
     secret: process.env.SESSION_SECRET ?? "dev-only",
     resave: false,
     saveUninitialized: false,

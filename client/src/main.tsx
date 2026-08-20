@@ -10,14 +10,29 @@ import "./index.css";
 // instance can take ~30s and may bounce off a 502 while the container boots —
 // hence the patient retry schedule. Long staleTime + no refetch-on-focus keeps
 // navigation between pages instant instead of re-paying that cost per view.
+//
+// networkMode "always" is the important one. React Query's default trusts
+// navigator.onLine and, when that reads false, parks the query in a "paused"
+// state that never issues the request and never errors — the page then shows
+// loading skeletons forever with nothing to retry and nothing to report.
+// navigator.onLine is unreliable (VPNs, captive portals, some corporate
+// networks and several browsers report false while the connection is fine),
+// and it was doing exactly that here. We would rather attempt the request and
+// let a real failure surface as a real error we can show and retry.
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
+      networkMode: "always",
       staleTime: 1000 * 60 * 5,
       cacheTime: 1000 * 60 * 60,
       refetchOnWindowFocus: false,
       retry: 3,
       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
+    },
+    mutations: {
+      // Same reasoning: an admin pressing Save must get either a result or an
+      // error, never a button that silently hangs.
+      networkMode: "always",
     },
   },
 });

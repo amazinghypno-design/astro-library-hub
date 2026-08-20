@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, count, desc, eq, ilike, isNull, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/client";
 import { libraryCategories, libraryFiles, shareLinks } from "../db/schema";
 import { TRPCError } from "@trpc/server";
@@ -38,60 +38,59 @@ async function resolveViewableFile(input: z.infer<typeof viewInput>) {
 
 export const libraryRouter = router({
   dashboard: publicProcedure.query(async () => {
-    // Every one of these is independent, so they go out together: run
-    // sequentially they cost seven round-trips to Supabase stacked end to end,
-    // which is what the homepage waits on before it can render anything.
-    // Type counts are aggregated in Postgres rather than by fetching one row
-    // per published file and tallying them here.
-    const [totalRow, publishedRow, draftRow, archivedRow, uncategorizedRow, typeRows, categoryCounts] =
-      await Promise.all([
-        db.select({ n: count() }).from(libraryFiles).then((rows) => rows[0]),
-        db.select({ n: count() }).from(libraryFiles).where(PUBLIC_FILTER).then((rows) => rows[0]),
-        db
-          .select({ n: count() })
-          .from(libraryFiles)
-          .where(eq(libraryFiles.status, "draft"))
-          .then((rows) => rows[0]),
-        db
-          .select({ n: count() })
-          .from(libraryFiles)
-          .where(eq(libraryFiles.status, "archived"))
-          .then((rows) => rows[0]),
-        db
-          .select({ n: count() })
-          .from(libraryFiles)
-          .where(and(PUBLIC_FILTER, isNull(libraryFiles.categoryId)))
-          .then((rows) => rows[0]),
-        db
-          .select({ documentType: libraryFiles.documentType, n: count() })
-          .from(libraryFiles)
-          .where(PUBLIC_FILTER)
-          .groupBy(libraryFiles.documentType),
-        db
-          .select({
-            categoryId: libraryCategories.id,
-            name: libraryCategories.name,
-            slug: libraryCategories.slug,
-            fileCount: count(libraryFiles.id),
-          })
-          .from(libraryCategories)
-          .leftJoin(libraryFiles, and(eq(libraryFiles.categoryId, libraryCategories.id), PUBLIC_FILTER))
-          .groupBy(libraryCategories.id)
-          .orderBy(desc(count(libraryFiles.id))),
-      ]);
+    // One row, one connection, one round-trip. This deliberately does NOT fan
+    // the counts out across parallel queries: Supabase's session-mode pooler
+    // allows 15 client connections in total, shared with the session store and
+    // with every other instance of this server, and a burst of concurrent
+    // counts exhausts it (PostgresError EMAXCONNSESSION) — which fails the
+    // whole tRPC batch, so the homepage renders nothing at all. Conditional
+    // aggregates get the same numbers from a single scan instead.
+    const publishedSql = sql`${libraryFiles.status} = 'published' and ${libraryFiles.visibility} = 'public'`;
+    const publishedCount = (extra?: SQL) =>
+      sql<number>`count(*) filter (where ${publishedSql}${extra ? sql` and ${extra}` : sql``})`.mapWith(Number);
 
-    const typeCounts = { ebook: 0, document: 0, spreadsheet: 0, slide: 0, poster: 0, other: 0 };
-    for (const row of typeRows) {
-      typeCounts[row.documentType] += row.n;
-    }
+    const [totals] = await db
+      .select({
+        total: count(),
+        published: publishedCount(),
+        draft: sql<number>`count(*) filter (where ${libraryFiles.status} = 'draft')`.mapWith(Number),
+        archived: sql<number>`count(*) filter (where ${libraryFiles.status} = 'archived')`.mapWith(Number),
+        uncategorized: publishedCount(sql`${libraryFiles.categoryId} is null`),
+        ebook: publishedCount(sql`${libraryFiles.documentType} = 'ebook'`),
+        document: publishedCount(sql`${libraryFiles.documentType} = 'document'`),
+        spreadsheet: publishedCount(sql`${libraryFiles.documentType} = 'spreadsheet'`),
+        slide: publishedCount(sql`${libraryFiles.documentType} = 'slide'`),
+        poster: publishedCount(sql`${libraryFiles.documentType} = 'poster'`),
+        other: publishedCount(sql`${libraryFiles.documentType} = 'other'`),
+      })
+      .from(libraryFiles);
+
+    const categoryCounts = await db
+      .select({
+        categoryId: libraryCategories.id,
+        name: libraryCategories.name,
+        slug: libraryCategories.slug,
+        fileCount: count(libraryFiles.id),
+      })
+      .from(libraryCategories)
+      .leftJoin(libraryFiles, and(eq(libraryFiles.categoryId, libraryCategories.id), PUBLIC_FILTER))
+      .groupBy(libraryCategories.id)
+      .orderBy(desc(count(libraryFiles.id)));
 
     return {
-      total: totalRow.n,
-      published: publishedRow.n,
-      draft: draftRow.n,
-      archived: archivedRow.n,
-      uncategorized: uncategorizedRow.n,
-      typeCounts,
+      total: totals.total,
+      published: totals.published,
+      draft: totals.draft,
+      archived: totals.archived,
+      uncategorized: totals.uncategorized,
+      typeCounts: {
+        ebook: totals.ebook,
+        document: totals.document,
+        spreadsheet: totals.spreadsheet,
+        slide: totals.slide,
+        poster: totals.poster,
+        other: totals.other,
+      },
       categoryCounts,
     };
   }),

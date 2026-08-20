@@ -36,6 +36,11 @@ export default function Home() {
   const servingCache = !dashboardQuery.data && !!dashboard;
   const showWakingNotice = useSlowLoadNotice(!dashboard && !recentFiles && !loadFailed);
   const refreshingFromCache = servingCache && dashboardQuery.isFetching;
+
+  function retryLoad() {
+    void dashboardQuery.refetch();
+    void recentFilesQuery.refetch();
+  }
   const cacheAfterFailure = servingCache && loadFailed;
 
   function onSearch(e: React.FormEvent) {
@@ -55,7 +60,7 @@ export default function Home() {
     <div className="space-y-14 sm:space-y-16">
       {showWakingNotice && <WakingNotice />}
       {refreshingFromCache && <RefreshingNotice />}
-      {cacheAfterFailure && <StaleDataNotice />}
+      {cacheAfterFailure && <StaleDataNotice onRetry={retryLoad} retrying={dashboardQuery.isFetching} />}
       <button
         type="button"
         onClick={() => navigate("/admin/library")}
@@ -104,8 +109,12 @@ export default function Home() {
 
       <section>
         <SectionHeading title="ภาพรวมคลัง" />
-        {!dashboard && dashboardQuery.isLoading && <SkeletonRow count={4} />}
-        {!dashboard && loadFailed && <ErrorNote text="โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชหน้าอีกครั้ง" />}
+        {/* Failure wins over the skeleton: showing both at once told the reader
+            "still loading" and "gave up" in the same breath. */}
+        {!dashboard && loadFailed && (
+          <ErrorNote text="โหลดข้อมูลไม่สำเร็จ" onRetry={retryLoad} retrying={dashboardQuery.isFetching} />
+        )}
+        {!dashboard && !loadFailed && dashboardQuery.isLoading && <SkeletonRow count={4} />}
         {dashboard && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
             <StatCard label="ไฟล์ทั้งหมดที่เผยแพร่" count={dashboard.published} highlight Icon={IconStar} to="/library?all=1" />
@@ -161,7 +170,7 @@ export default function Home() {
 
       <section>
         <SectionHeading title="ไฟล์ล่าสุด" />
-        {!recentFiles && recentFilesQuery.isLoading && <SkeletonCards count={3} />}
+        {!recentFiles && !loadFailed && recentFilesQuery.isLoading && <SkeletonCards count={3} />}
         {recentFiles && recentFiles.files.length === 0 && <EmptyNote text="ยังไม่มีรายการในฐานข้อมูล" />}
         {recentFiles && recentFiles.files.length > 0 && (
           <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
@@ -215,8 +224,22 @@ function EmptyNote({ text }: { text: string }) {
   return <div className="card text-navy-700/60 py-10 text-center">{text}</div>;
 }
 
-function ErrorNote({ text }: { text: string }) {
-  return <div className="text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">{text}</div>;
+function ErrorNote({ text, onRetry, retrying }: { text: string; onRetry?: () => void; retrying?: boolean }) {
+  return (
+    <div className="text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+      <span>{text}</span>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retrying}
+          className="text-sm font-medium underline underline-offset-2 hover:no-underline disabled:opacity-60"
+        >
+          {retrying ? "กำลังลองใหม่…" : "ลองใหม่อีกครั้ง"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -251,13 +274,19 @@ function RefreshingNotice() {
  * The cache stops the page looking broken, but it must not quietly pass old
  * numbers off as current ones once the refresh has actually failed.
  */
-function StaleDataNotice() {
+function StaleDataNotice({ onRetry, retrying }: { onRetry: () => void; retrying: boolean }) {
   return (
     <div className="card px-4 py-3.5 border-navy-900/10 bg-navy-900/[0.03] text-sm text-navy-900">
       <span className="font-medium">เชื่อมต่อเซิร์ฟเวอร์ไม่ได้</span>{" "}
-      <span className="text-navy-700/70">
-        ข้อมูลด้านล่างเป็นข้อมูลที่บันทึกไว้จากการเข้าครั้งก่อน ตรวจสอบอินเทอร์เน็ตแล้วรีเฟรชหน้าอีกครั้ง
-      </span>
+      <span className="text-navy-700/70">ข้อมูลด้านล่างเป็นข้อมูลที่บันทึกไว้จากการเข้าครั้งก่อน</span>{" "}
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={retrying}
+        className="font-medium underline underline-offset-2 hover:no-underline disabled:opacity-60"
+      >
+        {retrying ? "กำลังลองใหม่…" : "ลองใหม่อีกครั้ง"}
+      </button>
     </div>
   );
 }
