@@ -1,3 +1,5 @@
+import { CHART_HUES, FILE_TYPE_HUES, categoryHues } from "../lib/chartPalette";
+
 interface Slice {
   id: string;
   label: string;
@@ -13,13 +15,17 @@ const TYPE_LABELS: Record<string, string> = {
   other: "อื่นๆ",
 };
 
-// Sequential, one hue (brand gold) stepped by lightness — magnitude encoding,
-// not category identity, so a single ramp is correct (see dataviz guidance:
-// "Sequential = one hue, light→dark"). Labels are direct-labeled in the
-// legend, so identity never depends on telling two slices' colors apart.
-const STEPS = ["#b8893a", "#d4a94a", "#e8c168", "#f0d28c", "#f5deac", "#f9ebce"];
+// Slices carry identity, not magnitude — the share is already in the labels —
+// so each one takes its own hue from the shared categorical palette rather than
+// a step of a single gold ramp (see lib/chartPalette for the palette and the
+// separation figures). Every slice is direct-labeled in the legend, so identity
+// never rests on telling two colours apart.
 
-function Donut({ slices, centerLabel }: { slices: Slice[]; centerLabel: string }) {
+// Degrees of white card surface between neighbouring slices, so two of them
+// never bleed into one shape.
+const SLICE_GAP_DEG = 1.5;
+
+function Donut({ slices, centerLabel, colorFor }: { slices: Slice[]; centerLabel: string; colorFor: (id: string, i: number) => string }) {
   const withCounts = slices.filter((s) => s.count > 0);
   const total = withCounts.reduce((sum, s) => sum + s.count, 0);
 
@@ -32,10 +38,13 @@ function Donut({ slices, centerLabel }: { slices: Slice[]; centerLabel: string }
     const startDeg = (cursor / total) * 360;
     cursor += s.count;
     const endDeg = (cursor / total) * 360;
-    return { ...s, color: STEPS[i % STEPS.length], startDeg, endDeg };
+    return { ...s, color: colorFor(s.id, i), startDeg, endDeg };
   });
 
-  const gradient = segments.map((s) => `${s.color} ${s.startDeg}deg ${s.endDeg}deg`).join(", ");
+  const gap = segments.length > 1 ? SLICE_GAP_DEG : 0;
+  const gradient = segments
+    .flatMap((s) => [`#fff ${s.startDeg}deg ${s.startDeg + gap}deg`, `${s.color} ${s.startDeg + gap}deg ${s.endDeg}deg`])
+    .join(", ");
 
   return (
     <div className="card p-5 sm:p-6 flex-1 flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-8">
@@ -65,7 +74,8 @@ function Donut({ slices, centerLabel }: { slices: Slice[]; centerLabel: string }
 
 export function CategoryDonutChart({ categories }: { categories: { categoryId: string; name: string; fileCount: number }[] }) {
   const slices = categories.map((c) => ({ id: c.categoryId, label: c.name, count: c.fileCount }));
-  return <Donut slices={slices} centerLabel="ไฟล์ทั้งหมด" />;
+  const hues = categoryHues(slices.filter((s) => s.count > 0).map((s) => s.id));
+  return <Donut slices={slices} centerLabel="ไฟล์ทั้งหมด" colorFor={(_id, i) => hues[i]} />;
 }
 
 export function FileTypeDonutChart({ typeCounts }: { typeCounts: Record<string, number> }) {
@@ -74,5 +84,5 @@ export function FileTypeDonutChart({ typeCounts }: { typeCounts: Record<string, 
     label: TYPE_LABELS[key] ?? key,
     count,
   }));
-  return <Donut slices={slices} centerLabel="ไฟล์ตามประเภท" />;
+  return <Donut slices={slices} centerLabel="ไฟล์ตามประเภท" colorFor={(id, i) => FILE_TYPE_HUES[id] ?? CHART_HUES[i % CHART_HUES.length]} />;
 }
