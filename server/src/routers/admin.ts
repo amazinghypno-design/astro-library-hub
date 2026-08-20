@@ -9,8 +9,13 @@ import { findDuplicate } from "../domain/duplicatePredicate";
 import { checkChecksum, checkRawSize } from "../domain/uploadGuards";
 import { defaultStatusForNewUpload, visibilityForStatus, type FileStatus } from "../domain/publicationPolicy";
 import { storageAdapter } from "../storage/index";
-import { inspectPdf } from "../services/pdfMetadata";
-import { compressPdfBuffer } from "../services/compressPdfBuffer";
+// Loaded on demand, not at boot: these two modules pull in pdf-parse, pdf-lib
+// and sharp, which together cost several seconds of startup and a large chunk
+// of the 512MB budget on Render's free tier. They are only needed while an
+// admin uploads a PDF, so keeping them out of the boot import graph makes the
+// cold start after the free instance sleeps noticeably shorter for readers.
+const loadPdfMetadata = () => import("../services/pdfMetadata");
+const loadPdfCompressor = () => import("../services/compressPdfBuffer");
 import { fromEmbeddedInfo, fromFirstPageText, mergeSuggestions } from "../domain/metadataExtraction";
 import { classifyDocumentType } from "../domain/classifyDocumentType";
 
@@ -111,6 +116,7 @@ export const adminRouter = router({
       }
       try {
         const bytes = await storageAdapter.get(input.storageKey);
+        const { inspectPdf } = await loadPdfMetadata();
         const inspection = await inspectPdf(bytes);
         const suggestion = mergeSuggestions(
           fromEmbeddedInfo(inspection.embeddedTitle, inspection.embeddedAuthor),
@@ -204,6 +210,7 @@ export const adminRouter = router({
       let detectedDocumentType = classifyDocumentType(input.mimeType, input.originalName);
       if (input.mimeType === "application/pdf" && !skipHeavyProcessing) {
         try {
+          const { inspectPdf } = await loadPdfMetadata();
           const inspection = await inspectPdf(bytes);
           extractedText = inspection.fullText;
           pageCount = inspection.pageCount;
@@ -227,6 +234,7 @@ export const adminRouter = router({
       const PREVIEW_WORTHY_MIN_BYTES = 5 * 1024 * 1024;
       if (input.mimeType === "application/pdf" && !skipHeavyProcessing && bytes.byteLength > PREVIEW_WORTHY_MIN_BYTES) {
         try {
+          const { compressPdfBuffer } = await loadPdfCompressor();
           const { bytes: previewBytes } = await compressPdfBuffer(bytes, { quality: 80, maxDimension: 1800 });
           if (previewBytes.byteLength < bytes.byteLength) {
             const key = `${input.storageKey}.preview.pdf`;

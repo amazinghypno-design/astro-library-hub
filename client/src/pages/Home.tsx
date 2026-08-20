@@ -6,6 +6,7 @@ import CategoryBarChart from "../components/CategoryBarChart";
 import { FileTypeDonutChart } from "../components/CategoryDonutChart";
 import FileCard from "../components/FileCard";
 import { setPendingUploadFile } from "../lib/pendingUpload";
+import { useStaleCache, useSlowLoadNotice } from "../lib/staleCache";
 
 const TYPE_CARDS: { key: "ebook" | "document" | "spreadsheet" | "slide" | "poster"; label: string; description: string; Icon: (p: IconProps) => JSX.Element }[] = [
   { key: "ebook", label: "E-book", description: "หนังสือ PDF/EPUB ที่เผยแพร่แล้ว", Icon: IconEbook },
@@ -19,8 +20,23 @@ export default function Home() {
   const navigate = useNavigate();
   const [keyword, setKeyword] = useState("");
   const [uploadDragOver, setUploadDragOver] = useState(false);
-  const dashboard = trpc.library.dashboard.useQuery();
-  const recentFiles = trpc.library.files.useQuery({ page: 1, pageSize: 6 });
+  const dashboardQuery = trpc.library.dashboard.useQuery();
+  const recentFilesQuery = trpc.library.files.useQuery({ page: 1, pageSize: 6 });
+  // Last visit's payload stands in until the network answers, so a returning
+  // reader sees the real library straight away even while the free-tier API is
+  // still waking up. See lib/staleCache.ts.
+  const dashboard = useStaleCache("home:dashboard", dashboardQuery.data);
+  const recentFiles = useStaleCache("home:recent-files", recentFilesQuery.data);
+  // "paused" is React Query's offline state: the request never went out, so it
+  // reports neither an error nor an in-flight fetch. Left unhandled the page
+  // just sits there showing nothing at all, which is the exact failure this
+  // whole change is meant to remove — so it counts as a failed load here.
+  const isOffline = dashboardQuery.fetchStatus === "paused";
+  const loadFailed = dashboardQuery.isError || isOffline;
+  const servingCache = !dashboardQuery.data && !!dashboard;
+  const showWakingNotice = useSlowLoadNotice(!dashboard && !recentFiles && !loadFailed);
+  const refreshingFromCache = servingCache && dashboardQuery.isFetching;
+  const cacheAfterFailure = servingCache && loadFailed;
 
   function onSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -37,6 +53,9 @@ export default function Home() {
 
   return (
     <div className="space-y-14 sm:space-y-16">
+      {showWakingNotice && <WakingNotice />}
+      {refreshingFromCache && <RefreshingNotice />}
+      {cacheAfterFailure && <StaleDataNotice />}
       <button
         type="button"
         onClick={() => navigate("/admin/library")}
@@ -85,35 +104,35 @@ export default function Home() {
 
       <section>
         <SectionHeading title="ภาพรวมคลัง" />
-        {dashboard.isLoading && <SkeletonRow count={4} />}
-        {dashboard.isError && <ErrorNote text="โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชหน้าอีกครั้ง" />}
-        {dashboard.data && (
+        {!dashboard && dashboardQuery.isLoading && <SkeletonRow count={4} />}
+        {!dashboard && loadFailed && <ErrorNote text="โหลดข้อมูลไม่สำเร็จ ลองรีเฟรชหน้าอีกครั้ง" />}
+        {dashboard && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-            <StatCard label="ไฟล์ทั้งหมดที่เผยแพร่" count={dashboard.data.published} highlight Icon={IconStar} to="/library?all=1" />
+            <StatCard label="ไฟล์ทั้งหมดที่เผยแพร่" count={dashboard.published} highlight Icon={IconStar} to="/library?all=1" />
             {TYPE_CARDS.map((card) => (
               <StatCard
                 key={card.key}
                 label={card.label}
                 description={card.description}
-                count={dashboard.data.typeCounts[card.key]}
+                count={dashboard.typeCounts[card.key]}
                 Icon={card.Icon}
                 to={`/library?type=${card.key}`}
               />
             ))}
-            <StatCard label="ยังไม่ได้จัดหมวด" count={dashboard.data.uncategorized} Icon={IconFolderOpen} to="/library?uncategorized=1" />
+            <StatCard label="ยังไม่ได้จัดหมวด" count={dashboard.uncategorized} Icon={IconFolderOpen} to="/library?uncategorized=1" />
           </div>
         )}
       </section>
 
-      {dashboard.data && dashboard.data.categoryCounts.some((c) => c.fileCount > 0) && (
+      {dashboard && dashboard.categoryCounts.some((c) => c.fileCount > 0) && (
         <section className="grid md:grid-cols-2 gap-4 items-stretch">
           <div className="flex flex-col">
             <SectionHeading title="หมวดหมู่ที่มีไฟล์เยอะที่สุด" />
-            <CategoryBarChart categories={dashboard.data.categoryCounts} />
+            <CategoryBarChart categories={dashboard.categoryCounts} />
           </div>
           <div className="flex flex-col">
             <SectionHeading title="สัดส่วนไฟล์ตามประเภทเอกสาร" />
-            <FileTypeDonutChart typeCounts={dashboard.data.typeCounts} />
+            <FileTypeDonutChart typeCounts={dashboard.typeCounts} />
           </div>
         </section>
       )}
@@ -125,12 +144,12 @@ export default function Home() {
             ดูทั้งหมด →
           </Link>
         </div>
-        {dashboard.data && dashboard.data.categoryCounts.length === 0 && (
+        {dashboard && dashboard.categoryCounts.length === 0 && (
           <EmptyNote text="ยังไม่มีหมวดหมู่ในฐานข้อมูล" />
         )}
-        {dashboard.data && dashboard.data.categoryCounts.length > 0 && (
+        {dashboard && dashboard.categoryCounts.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {dashboard.data.categoryCounts.map((cat) => (
+            {dashboard.categoryCounts.map((cat) => (
               <Link key={cat.categoryId} to={`/library?categoryId=${cat.categoryId}`} className="card-interactive px-4 py-3.5">
                 <div className="font-medium text-navy-900">{cat.name}</div>
                 <div className="text-sm text-navy-700/55 mt-0.5">{cat.fileCount} ไฟล์</div>
@@ -142,10 +161,11 @@ export default function Home() {
 
       <section>
         <SectionHeading title="ไฟล์ล่าสุด" />
-        {recentFiles.data && recentFiles.data.files.length === 0 && <EmptyNote text="ยังไม่มีรายการในฐานข้อมูล" />}
-        {recentFiles.data && recentFiles.data.files.length > 0 && (
+        {!recentFiles && recentFilesQuery.isLoading && <SkeletonCards count={3} />}
+        {recentFiles && recentFiles.files.length === 0 && <EmptyNote text="ยังไม่มีรายการในฐานข้อมูล" />}
+        {recentFiles && recentFiles.files.length > 0 && (
           <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {recentFiles.data.files.map((file) => (
+            {recentFiles.files.map((file) => (
               <FileCard key={file.id} file={file} />
             ))}
           </div>
@@ -197,6 +217,59 @@ function EmptyNote({ text }: { text: string }) {
 
 function ErrorNote({ text }: { text: string }) {
   return <div className="text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">{text}</div>;
+}
+
+/**
+ * Shown only once a load has visibly dragged on. The API sleeps on its free
+ * plan, and a silent 30-second wait behind blank skeletons reads as a broken
+ * site — saying so outright is the difference between "slow" and "dead".
+ */
+function WakingNotice() {
+  return (
+    <div className="card flex items-center gap-3 px-4 py-3.5 border-gold-500/40 bg-gold-400/5">
+      <span aria-hidden className="w-4 h-4 rounded-full border-2 border-gold-500/30 border-t-gold-600 animate-spin shrink-0" />
+      <div className="text-sm text-navy-900">
+        <span className="font-medium">กำลังปลุกเซิร์ฟเวอร์…</span>{" "}
+        <span className="text-navy-700/70">
+          เซิร์ฟเวอร์พักตัวเมื่อไม่มีคนใช้งาน การเข้าครั้งแรกอาจรอ ~30 วินาที หลังจากนี้จะเร็วตามปกติ
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function RefreshingNotice() {
+  return (
+    <div className="flex items-center gap-2 text-xs text-navy-700/60">
+      <span aria-hidden className="w-3 h-3 rounded-full border-2 border-navy-900/15 border-t-navy-900/50 animate-spin shrink-0" />
+      กำลังอัปเดตข้อมูลล่าสุด… (ตัวเลขด้านล่างเป็นข้อมูลจากครั้งก่อน)
+    </div>
+  );
+}
+
+/**
+ * The cache stops the page looking broken, but it must not quietly pass old
+ * numbers off as current ones once the refresh has actually failed.
+ */
+function StaleDataNotice() {
+  return (
+    <div className="card px-4 py-3.5 border-navy-900/10 bg-navy-900/[0.03] text-sm text-navy-900">
+      <span className="font-medium">เชื่อมต่อเซิร์ฟเวอร์ไม่ได้</span>{" "}
+      <span className="text-navy-700/70">
+        ข้อมูลด้านล่างเป็นข้อมูลที่บันทึกไว้จากการเข้าครั้งก่อน ตรวจสอบอินเทอร์เน็ตแล้วรีเฟรชหน้าอีกครั้ง
+      </span>
+    </div>
+  );
+}
+
+function SkeletonCards({ count }: { count: number }) {
+  return (
+    <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="card p-4 h-20 animate-pulse bg-navy-900/[0.03]" />
+      ))}
+    </div>
+  );
 }
 
 function SkeletonRow({ count }: { count: number }) {

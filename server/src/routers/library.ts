@@ -8,7 +8,10 @@ import { isShareLinkValid } from "../domain/shareLink";
 import { selectRelevantPassages } from "../domain/passageRetrieval";
 import { router, publicProcedure } from "./trpc";
 import { storageAdapter } from "../storage/index";
-import { renderDocxToHtml, renderXlsxToSheets } from "../services/renderOfficePreview";
+// Loaded on demand (mammoth + xlsx are heavy and only used when someone opens
+// a Word/Excel preview) so they stay out of the boot path — see the same note
+// in routers/admin.ts.
+const loadOfficePreview = () => import("../services/renderOfficePreview");
 import { aiAdapter } from "../ai/index";
 
 const PUBLIC_FILTER = and(eq(libraryFiles.status, "published"), eq(libraryFiles.visibility, "public"));
@@ -35,36 +38,52 @@ async function resolveViewableFile(input: z.infer<typeof viewInput>) {
 
 export const libraryRouter = router({
   dashboard: publicProcedure.query(async () => {
-    const [totalRow] = await db.select({ n: count() }).from(libraryFiles);
-    const [publishedRow] = await db.select({ n: count() }).from(libraryFiles).where(PUBLIC_FILTER);
-    const [draftRow] = await db.select({ n: count() }).from(libraryFiles).where(eq(libraryFiles.status, "draft"));
-    const [archivedRow] = await db.select({ n: count() }).from(libraryFiles).where(eq(libraryFiles.status, "archived"));
-    const [uncategorizedRow] = await db
-      .select({ n: count() })
-      .from(libraryFiles)
-      .where(and(PUBLIC_FILTER, isNull(libraryFiles.categoryId)));
-
-    const publishedFiles = await db
-      .select({ documentType: libraryFiles.documentType })
-      .from(libraryFiles)
-      .where(PUBLIC_FILTER);
+    // Every one of these is independent, so they go out together: run
+    // sequentially they cost seven round-trips to Supabase stacked end to end,
+    // which is what the homepage waits on before it can render anything.
+    // Type counts are aggregated in Postgres rather than by fetching one row
+    // per published file and tallying them here.
+    const [totalRow, publishedRow, draftRow, archivedRow, uncategorizedRow, typeRows, categoryCounts] =
+      await Promise.all([
+        db.select({ n: count() }).from(libraryFiles).then((rows) => rows[0]),
+        db.select({ n: count() }).from(libraryFiles).where(PUBLIC_FILTER).then((rows) => rows[0]),
+        db
+          .select({ n: count() })
+          .from(libraryFiles)
+          .where(eq(libraryFiles.status, "draft"))
+          .then((rows) => rows[0]),
+        db
+          .select({ n: count() })
+          .from(libraryFiles)
+          .where(eq(libraryFiles.status, "archived"))
+          .then((rows) => rows[0]),
+        db
+          .select({ n: count() })
+          .from(libraryFiles)
+          .where(and(PUBLIC_FILTER, isNull(libraryFiles.categoryId)))
+          .then((rows) => rows[0]),
+        db
+          .select({ documentType: libraryFiles.documentType, n: count() })
+          .from(libraryFiles)
+          .where(PUBLIC_FILTER)
+          .groupBy(libraryFiles.documentType),
+        db
+          .select({
+            categoryId: libraryCategories.id,
+            name: libraryCategories.name,
+            slug: libraryCategories.slug,
+            fileCount: count(libraryFiles.id),
+          })
+          .from(libraryCategories)
+          .leftJoin(libraryFiles, and(eq(libraryFiles.categoryId, libraryCategories.id), PUBLIC_FILTER))
+          .groupBy(libraryCategories.id)
+          .orderBy(desc(count(libraryFiles.id))),
+      ]);
 
     const typeCounts = { ebook: 0, document: 0, spreadsheet: 0, slide: 0, poster: 0, other: 0 };
-    for (const file of publishedFiles) {
-      typeCounts[file.documentType] += 1;
+    for (const row of typeRows) {
+      typeCounts[row.documentType] += row.n;
     }
-
-    const categoryCounts = await db
-      .select({
-        categoryId: libraryCategories.id,
-        name: libraryCategories.name,
-        slug: libraryCategories.slug,
-        fileCount: count(libraryFiles.id),
-      })
-      .from(libraryCategories)
-      .leftJoin(libraryFiles, and(eq(libraryFiles.categoryId, libraryCategories.id), PUBLIC_FILTER))
-      .groupBy(libraryCategories.id)
-      .orderBy(desc(count(libraryFiles.id)));
 
     return {
       total: totalRow.n,
@@ -167,6 +186,7 @@ export const libraryRouter = router({
     }
 
     try {
+      const { renderDocxToHtml, renderXlsxToSheets } = await loadOfficePreview();
       if (capability === "docx-inline") {
         const html = await renderDocxToHtml(bytes);
         return { html, sheets: null };

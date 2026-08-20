@@ -5,7 +5,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { Readable } from "node:stream";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { appRouter } from "./routers/index";
 import { createContext } from "./routers/trpc";
 import { db } from "./db/client";
@@ -82,7 +82,18 @@ app.use(
   }),
 );
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+/**
+ * Doubles as the keep-alive target for the external uptime pinger that stops
+ * the free-tier instance from sleeping (see DEPLOY.md). It answers immediately
+ * and opens a database connection in the background, so the first real request
+ * after a cold start doesn't also pay for establishing the Postgres pool.
+ * Always 200: this reports "the process is up", and a ping that flapped on a
+ * transient database blip would be noise, not signal.
+ */
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+  void db.execute(sql`select 1`).catch(() => {});
+});
 
 /**
  * Download proxy: builds Content-Disposition ourselves instead of relying on

@@ -7,6 +7,20 @@ Two pieces, two free services, both connected to one GitHub repo so future
 - **Server** (Express/tRPC API) → **Render** (free web service)
 - Database (Supabase) and file storage (Cloudflare R2) stay exactly as they are — no change needed.
 
+## This deployment's actual URLs
+
+Recorded here because they live nowhere else in the repo — the names ended up
+crossed over, which makes them easy to mix up:
+
+| What | URL |
+|---|---|
+| Site (Vercel) | https://astro-library-hub-server.vercel.app |
+| API (Render) | https://astro-library-hub.onrender.com |
+| Keep-alive ping target (step 5) | https://astro-library-hub.onrender.com/health |
+
+Note the site carries `-server` in its name and the API does not — the reverse of
+what you would expect.
+
 ## 0. Push this repo to GitHub
 
 **If you're new to GitHub, the easiest way — no terminal commands, no typing passwords/tokens anywhere:**
@@ -37,7 +51,7 @@ git push -u origin main
    (`SESSION_SECRET` is generated for you automatically — don't fill that one in.)
 4. Deploy. Once live, copy the service URL Render gives you — looks like `https://astro-library-hub-server.onrender.com`.
 
-**Free-tier trade-off:** if nobody visits for a while, the server "sleeps" — the first request after that takes ~30–50 seconds to wake up, then it's normal speed. Fine for a personal single-user site.
+**Free-tier trade-off:** if nobody visits for a while, the server "sleeps" — the first request after that takes ~30–50 seconds to wake up, then it's normal speed. Step 5 below removes this with a free uptime pinger; do it, because a 30-second blank homepage is the single worst thing about this setup.
 
 ## 2. Deploy the client on Vercel
 
@@ -57,6 +71,32 @@ Go back to Render → your service → Environment → set `CLIENT_ORIGIN` to th
 - Open the Vercel URL. The homepage should load and show the library.
 - Log in at `/admin/login` with the admin account — this is the part that would break if `CLIENT_ORIGIN`/env vars are wrong, so it's the one thing worth checking by hand.
 - Try opening a file, downloading it, and (if logged in) editing a title — confirms the API, storage, and database are all correctly wired.
+
+## 5. Keep the server awake (free, ~2 minutes)
+
+Render's free plan shuts the instance down after ~15 minutes with no traffic, and
+the next visitor waits for a cold boot. A scheduled ping to `/health` keeps it
+running. Any free uptime pinger works; [cron-job.org](https://cron-job.org) is
+the simplest:
+
+1. Sign up free (email only, no card).
+2. **Create cronjob** → **URL**: `https://astro-library-hub.onrender.com/health`
+3. **Schedule**: every 10 minutes.
+4. Save, then hit **Test run** once — expect `{"ok":true}` back.
+
+[UptimeRobot](https://uptimerobot.com) does the same thing with a 5-minute
+minimum interval if you prefer it.
+
+**Watch the quota.** A free Render account gets 750 instance-hours a month, and
+an instance that never sleeps burns ~730 of them — it fits, but only while this
+is your one free service. If you deploy a second one, restrict the ping to a
+daily window (cron-job.org lets you pick hours) instead of running it 24/7.
+
+**Why not GitHub Actions?** A scheduled workflow looks free, but private repos
+only get 2,000 Actions-minutes a month and every run bills a minimum of one
+minute — pinging every 10 minutes needs ~4,300. It also silently disables
+scheduled workflows in repos with no commits for 60 days. An external pinger
+avoids both traps.
 
 ## Notes
 
