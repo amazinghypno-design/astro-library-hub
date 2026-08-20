@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { IconDocument, IconEbook, IconFolderOpen, IconPoster, IconSlide, IconSpreadsheet, IconStar, IconUpload, type IconProps } from "../components/icons";
+import { IconDocument, IconEbook, IconPoster, IconSlide, IconSpreadsheet, IconStar, IconUpload, type IconProps } from "../components/icons";
 import CategoryBarChart from "../components/CategoryBarChart";
 import { FileTypeDonutChart } from "../components/CategoryDonutChart";
 import FileCard from "../components/FileCard";
@@ -148,7 +148,6 @@ export default function Home() {
                 to={`/library?type=${card.key}`}
               />
             ))}
-            <StatCard label="ยังไม่ได้จัดหมวด" count={dashboard.uncategorized} Icon={IconFolderOpen} to="/library?uncategorized=1" />
           </div>
         )}
       </section>
