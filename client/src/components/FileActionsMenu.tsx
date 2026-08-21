@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { trpc } from "../lib/trpc";
 import { useAdminSession } from "../lib/useAdminSession";
 import { explainAdminError } from "../lib/explainAdminError";
-import { IconTrash } from "./icons";
+import { IconEdit, IconTrash } from "./icons";
 import ConfirmDialog from "./ConfirmDialog";
 
 export interface EditableFile {
@@ -110,18 +110,22 @@ export default function FileActionsMenu({ file, className = "" }: { file: Editab
 
   return (
     <div className={`relative shrink-0 ${className}`} onClick={stop}>
+      {/* A pencil in a bordered chip, not a faint ⋯: this menu is the only way
+          to fix a file from the page you noticed the mistake on, and a
+          40%-opacity glyph in the corner was not read as a button at all. */}
       <button
         type="button"
         onClick={(e) => {
           stop(e);
           setOpen((v) => !v);
         }}
-        aria-label="ตั้งค่าไฟล์นี้"
+        aria-label="แก้ไขไฟล์นี้"
         aria-haspopup="menu"
         aria-expanded={open}
-        className="text-navy-700/40 hover:text-navy-900 w-7 h-7 flex items-center justify-center rounded-md hover:bg-navy-900/5 transition-colors leading-none"
+        title="แก้ไขไฟล์นี้"
+        className="w-8 h-8 flex items-center justify-center rounded-lg border border-gold-500/45 bg-gold-400/10 text-gold-700 hover:bg-gold-400/25 hover:text-navy-900 transition-colors"
       >
-        ⋯
+        <IconEdit width={15} height={15} />
       </button>
       {open && (
         <>
