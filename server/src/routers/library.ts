@@ -6,9 +6,10 @@ import { libraryCategories, libraryFiles, shareLinks } from "../db/schema";
 import { TRPCError } from "@trpc/server";
 import { previewCapability } from "../domain/previewCapability";
 import { isShareLinkValid } from "../domain/shareLink";
-import { selectRelevantPassages } from "../domain/passageRetrieval";
+import { selectOverviewPassages, selectRelevantPassages } from "../domain/passageRetrieval";
 import { router, publicProcedure } from "./trpc";
 import { storageAdapter } from "../storage/index";
+import { extractOfficeText, hasExtractableText } from "../services/officeText";
 import { renderOfficePreviewCached, STORAGE_READ_FAILED } from "../services/officePreview";
 
 import { aiAdapter } from "../ai/index";
@@ -95,6 +96,25 @@ async function viewLinks(file: LinkableFile, req: Request, token?: string) {
     previewUrl: inlineFromStorage ? await storageAdapter.createPreviewUrl(file.previewStorageKey ?? file.storageKey) : null,
     downloadUrl: `${req.protocol}://${req.get("host")}/download/${file.id}${tokenQuery}`,
   };
+}
+
+/**
+ * Word and Excel files uploaded before the pipeline learned to read them have
+ * no stored text. Rather than leave them permanently unanswerable — the free
+ * instance has no shell to run a backfill from — the first question asked of
+ * one extracts the text and stores it, so only that first question waits.
+ */
+async function backfillOfficeText(file: typeof libraryFiles.$inferSelect): Promise<string | null> {
+  if (!hasExtractableText(file.mimeType)) return null;
+  try {
+    const bytes = await storageAdapter.get(file.storageKey);
+    const text = await extractOfficeText(bytes, file.mimeType);
+    if (!text) return null;
+    await db.update(libraryFiles).set({ extractedText: text }).where(eq(libraryFiles.id, file.id));
+    return text;
+  } catch {
+    return null;
+  }
 }
 
 export const libraryRouter = router({
@@ -215,7 +235,11 @@ export const libraryRouter = router({
       .where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
     if (!file) return null;
     const { storageKey, previewStorageKey, ...shared } = file;
-    return { ...shared, ...(await viewLinks(file, ctx.req)) };
+    // Office files may not have their text stored yet — the first question
+    // asked of one extracts it (backfillOfficeText), so the reader is offered
+    // the Q&A panel rather than being told the file does not support it.
+    const canAskAi = file.hasText || hasExtractableText(file.mimeType);
+    return { ...shared, canAskAi, ...(await viewLinks(file, ctx.req)) };
   }),
 
   fileByShareToken: publicProcedure.input(z.object({ token: z.string().min(1) })).query(async ({ input, ctx }) => {
@@ -227,6 +251,7 @@ export const libraryRouter = router({
     return {
       ...shared,
       hasText: !!extractedText && extractedText.length > 0,
+      canAskAi: (!!extractedText && extractedText.length > 0) || hasExtractableText(file.mimeType),
       ...(await viewLinks(file, ctx.req, input.token)),
     };
   }),
@@ -283,11 +308,17 @@ export const libraryRouter = router({
       const [file] = await db.select().from(libraryFiles).where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
       if (!file) throw new TRPCError({ code: "NOT_FOUND" });
 
-      if (!file.extractedText) {
+      const text = file.extractedText || (await backfillOfficeText(file));
+      if (!text) {
         return { answer: null, status: "NO_TEXT" as const };
       }
 
-      const passages = selectRelevantPassages(file.extractedText, input.question);
+      // Passages that match the question when it names something in the book;
+      // a spread of the book itself when it does not — which is every question
+      // about the work as a whole, and used to be answered with a flat
+      // "ไม่พบข้อมูลนี้ในเล่มนี้". Both paths send only this file's own text.
+      const matched = selectRelevantPassages(text, input.question);
+      const passages = matched.length > 0 ? matched : selectOverviewPassages(text);
       if (passages.length === 0) {
         return { answer: "ไม่พบข้อมูลนี้ในเล่มนี้", status: "ANSWERED" as const };
       }

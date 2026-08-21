@@ -71,7 +71,7 @@ export default function FileDetail() {
         />
       </div>
 
-      <BookChatPanel fileId={file.id} hasText={file.hasText} />
+      <BookChatPanel fileId={file.id} canAsk={file.canAskAi} />
 
       {isAdmin && id && <ShareLinkPanel fileId={id} />}
     </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunkText, selectRelevantPassages } from "./passageRetrieval";
+import { chunkText, selectOverviewPassages, selectRelevantPassages } from "./passageRetrieval";
 
 describe("chunkText", () => {
   it("returns the whole text as one chunk when under the size limit", () => {
@@ -50,5 +50,37 @@ describe("selectRelevantPassages", () => {
     // but must not keep piling on more after that
     expect(result.length).toBeLessThanOrEqual(2);
     expect(total).toBeLessThan(1000);
+  });
+
+  it("does not go looking for the wrapper words of a general question", () => {
+    // Written as Thai is written, without spaces: the whole thing is one
+    // token, and every word in it is about asking, not about astrology. The
+    // caller answers these from selectOverviewPassages instead.
+    expect(selectRelevantPassages(book, "เล่มนี้พูดถึงอะไรบ้าง")).toEqual([]);
+  });
+
+  it("still matches a topic asked about without spaces", () => {
+    const result = selectRelevantPassages(book, "ลายมือคืออะไร");
+    expect(result.some((p) => p.includes("ลายมือ"))).toBe(true);
+  });
+});
+
+describe("selectOverviewPassages", () => {
+  const book = Array.from({ length: 12 }, (_, i) => `บทที่ ${i} ${"เนื้อหา".repeat(60)}`).join("\n\n");
+
+  it("samples across the whole book, starting at the beginning", () => {
+    const result = selectOverviewPassages(book, { maxPassages: 4 });
+    expect(result.length).toBe(4);
+    expect(book.indexOf(result[0])).toBe(0);
+    // spread out rather than four neighbouring chunks
+    expect(book.indexOf(result[3])).toBeGreaterThan(book.indexOf(result[1]));
+  });
+
+  it("returns [] for an empty book", () => {
+    expect(selectOverviewPassages("")).toEqual([]);
+  });
+
+  it("never returns more passages than the book has chunks", () => {
+    expect(selectOverviewPassages("สั้นมาก", { maxPassages: 4 }).length).toBe(1);
   });
 });

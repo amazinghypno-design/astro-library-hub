@@ -3,6 +3,7 @@ import { db } from "../db/client";
 import { libraryFiles } from "../db/schema";
 import { classifyDocumentType } from "../domain/classifyDocumentType";
 import { storageAdapter } from "../storage/index";
+import { extractOfficeText, hasExtractableText } from "./officeText";
 
 /**
  * Everything expensive that happens to a newly uploaded PDF — text extraction
@@ -74,7 +75,7 @@ export async function processUploadedFile(fileId: string, options: PostUploadOpt
     .from(libraryFiles)
     .where(eq(libraryFiles.id, fileId));
 
-  if (!file || file.mimeType !== "application/pdf") return;
+  if (!file) return;
 
   let bytes: Buffer;
   try {
@@ -82,6 +83,22 @@ export async function processUploadedFile(fileId: string, options: PostUploadOpt
   } catch {
     return;
   }
+
+  // Word and Excel files carry their text in the file itself; pulling it out
+  // here is what lets them be searched and asked questions about, the same as
+  // a PDF. Nothing else in this function applies to them.
+  if (hasExtractableText(file.mimeType)) {
+    if (bytes.byteLength > TEXT_EXTRACTION_MAX_BYTES) return;
+    try {
+      const text = await extractOfficeText(bytes, file.mimeType);
+      if (text) await db.update(libraryFiles).set({ extractedText: text }).where(eq(libraryFiles.id, fileId));
+    } catch {
+      // A corrupt document simply has no text to offer.
+    }
+    return;
+  }
+
+  if (file.mimeType !== "application/pdf") return;
 
   if (bytes.byteLength <= TEXT_EXTRACTION_MAX_BYTES) {
     try {

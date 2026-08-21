@@ -6,6 +6,25 @@ const STOPWORDS = new Set([
   "the", "a", "an", "is", "are", "was", "were", "of", "in", "on", "to", "and", "or", "what", "how", "why", "does", "do", "this", "that",
 ]);
 
+/**
+ * Phrases a reader wraps a question in that say nothing about the book's
+ * subject. Thai is written without spaces, so these cannot be removed as
+ * tokens the way English stopwords can — they are stripped from the string
+ * before anything is matched, or every n-gram of "เล่มนี้พูดถึงอะไรบ้าง" goes
+ * looking for the words "เล่มนี้" and "พูดถึง" inside an astrology manual and
+ * finds nothing.
+ */
+const QUESTION_PHRASES = [
+  "หนังสือเล่มนี้", "ในเล่มนี้", "เล่มนี้", "ในหนังสือ", "หนังสือ", "เอกสารนี้", "ไฟล์นี้",
+  "พูดถึงเรื่อง", "พูดถึง", "กล่าวถึง", "เกี่ยวกับ", "อธิบาย", "บอกหน่อย", "ช่วยบอก", "ช่วย",
+  "อะไรบ้าง", "อย่างไรบ้าง", "ยังไงบ้าง", "มีอะไร", "คืออะไร", "หมายถึงอะไร", "ทำไม", "เมื่อไหร่",
+  "หน่อย", "ได้ไหม", "ไหม", "ครับ", "ค่ะ", "คะ",
+];
+
+function stripQuestionPhrases(question: string): string {
+  return QUESTION_PHRASES.reduce((acc, phrase) => acc.split(phrase).join(" "), question);
+}
+
 function extractKeywords(question: string): string[] {
   const raw = question
     .toLowerCase()
@@ -27,6 +46,32 @@ function charNGrams(s: string, n = 4): string[] {
   const grams: string[] = [];
   for (let i = 0; i <= compact.length - n; i++) grams.push(compact.slice(i, i + n));
   return grams;
+}
+
+/**
+ * A spread of the book — its opening plus evenly spaced samples from the rest.
+ * Used when nothing in the text matches the question's wording, which is the
+ * normal case for a question about the book as a whole ("เล่มนี้พูดถึงอะไรบ้าง"
+ * shares no words with the astrology inside it). The answer still comes only
+ * from the book's own text; without this the reader got "ไม่พบข้อมูลนี้ในเล่มนี้"
+ * for every general question, which read as the feature being broken.
+ */
+export function selectOverviewPassages(fullText: string, options: SelectPassagesOptions = {}): string[] {
+  const { maxPassages = 4, maxTotalChars = 6000, chunkSize = 900, overlap = 150 } = options;
+  const chunks = chunkText(fullText, chunkSize, overlap);
+  if (chunks.length === 0) return [];
+
+  const wanted = Math.min(maxPassages, chunks.length);
+  const step = chunks.length / wanted;
+  const picked: string[] = [];
+  let totalChars = 0;
+  for (let i = 0; i < wanted; i++) {
+    const chunk = chunks[Math.floor(i * step)];
+    if (totalChars + chunk.length > maxTotalChars && picked.length > 0) break;
+    picked.push(chunk);
+    totalChars += chunk.length;
+  }
+  return picked;
 }
 
 export function chunkText(text: string, chunkSize = 900, overlap = 150): string[] {
@@ -55,15 +100,19 @@ export interface SelectPassagesOptions {
 /**
  * Ranks chunks of a book's extracted text by relevance to a question using
  * plain keyword/n-gram overlap — no embeddings/vector DB needed at this
- * scale. Returns [] when nothing scores above zero, which the caller uses as
- * the "decline rather than fabricate" signal (see routers/library.ts
- * askBook) — an empty result short-circuits before ever calling the AI.
+ * scale. Returns [] when nothing scores above zero; the caller then falls
+ * back to selectOverviewPassages so a question about the book as a whole
+ * still gets answered from the book's own text (see routers/library.ts
+ * askBook). Either way the AI only ever sees text from this file.
  */
 export function selectRelevantPassages(fullText: string, question: string, options: SelectPassagesOptions = {}): string[] {
   const { maxPassages = 4, maxTotalChars = 6000, chunkSize = 900, overlap = 150 } = options;
 
-  const keywords = extractKeywords(question);
-  const ngrams = charNGrams(question);
+  const topical = stripQuestionPhrases(question);
+  const keywords = extractKeywords(topical);
+  // Two n-gram widths: the shorter one recalls a Thai word buried in a longer
+  // run, the longer one is specific enough to be worth more when it does hit.
+  const ngrams = [...charNGrams(topical, 3).map((g) => ({ g, weight: 1 })), ...charNGrams(topical, 5).map((g) => ({ g, weight: 2 }))];
   if (keywords.length === 0 && ngrams.length === 0) return [];
 
   const chunks = chunkText(fullText, chunkSize, overlap);
@@ -77,8 +126,8 @@ export function selectRelevantPassages(fullText: string, question: string, optio
         idx = lower.indexOf(kw, idx + kw.length);
       }
     }
-    for (const gram of ngrams) {
-      if (lower.includes(gram)) score += 1;
+    for (const { g, weight } of ngrams) {
+      if (lower.includes(g)) score += weight;
     }
     return { text, score };
   });

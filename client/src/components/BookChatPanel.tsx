@@ -8,7 +8,7 @@ interface ChatTurn {
   error: string | null;
 }
 
-export default function BookChatPanel({ fileId, hasText }: { fileId: string; hasText: boolean }) {
+export default function BookChatPanel({ fileId, canAsk }: { fileId: string; canAsk: boolean }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const askBook = trpc.library.askBook.useMutation();
@@ -38,7 +38,7 @@ export default function BookChatPanel({ fileId, hasText }: { fileId: string; has
     }
   }
 
-  if (!hasText) {
+  if (!canAsk) {
     return (
       <div className="card p-5">
         <h2 className="font-serif text-lg font-semibold text-navy-900 mb-1">ถามหนังสือเล่มนี้</h2>
