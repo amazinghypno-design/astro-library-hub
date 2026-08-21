@@ -2,6 +2,7 @@ import { useParams, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { IconDownload, IconExpand } from "../components/icons";
 import FilePreviewPane from "../components/FilePreviewPane";
+import FileActionsMenu from "../components/FileActionsMenu";
 import ShareLinkPanel from "../components/ShareLinkPanel";
 import BookChatPanel from "../components/BookChatPanel";
 import { useAdminSession } from "../lib/useAdminSession";
@@ -27,7 +28,8 @@ export default function FileDetail() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
         <h1 className="font-serif text-2xl sm:text-3xl font-semibold text-navy-900">{file.title}</h1>
         <div className="text-navy-700/70 mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
           {file.author && (
@@ -44,6 +46,10 @@ export default function FileDetail() {
           <span>ขนาด: {(file.size / 1024 / 1024).toFixed(2)} MB</span>
         </div>
         {file.description && <p className="text-navy-800 mt-3">{file.description}</p>}
+        </div>
+        {/* Same ⋯ menu as the cards, so a file can be corrected from the page
+            you are reading it on and not only from a list. */}
+        <FileActionsMenu file={file} className="mt-1" />
       </div>
 
       <div className="flex gap-3">

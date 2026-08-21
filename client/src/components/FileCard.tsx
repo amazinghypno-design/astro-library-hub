@@ -1,12 +1,13 @@
 import { Link, useNavigate } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { fileTypeIcon } from "../lib/fileTypeIcon";
-import FileCardActions from "./FileCardActions";
+import FileActionsMenu from "./FileActionsMenu";
 
 interface FileCardFile {
   id: string;
   title: string;
   author: string | null;
+  year: number | null;
   mimeType: string;
   documentType: "ebook" | "document" | "spreadsheet" | "slide" | "poster" | "other";
   categoryId: string | null;
@@ -62,7 +63,7 @@ export default function FileCard({ file }: { file: FileCardFile }) {
           </Link>
         )}
       </div>
-      <FileCardActions fileId={file.id} title={file.title} categoryId={file.categoryId} />
+      <FileActionsMenu file={file} />
     </div>
   );
 }
