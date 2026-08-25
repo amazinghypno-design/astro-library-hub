@@ -75,3 +75,13 @@ Checked `~/Desktop` for an existing Astro Library Hub codebase before starting. 
 ## D5 — Package manager: npm instead of pnpm
 
 **Decision:** Use npm workspaces. The manual's example commands use `pnpm`; this machine has Node 24 and npm 11 installed, pnpm is not. Functionally equivalent for this project's needs — `npm run check` / `npm test` mirror the manual's `pnpm check` / `pnpm test -- --run`.
+
+## D11 — OCR runs in-process with Tesseract, not against a cloud OCR API
+
+**Finding:** 24 of the library's 36 files had no usable text — every exported poster (PNG/JPEG, which the upload pipeline skipped entirely) and every scanned book. Those files were findable by title only: invisible to content search, and refused by the per-book Q&A, which needs `extracted_text` to have something in it.
+
+**Decision:** OCR with `tesseract.js` (WASM, in-process) behind an `OcrAdapter` interface, selected by `OCR_PROVIDER` — the same adapter pattern as D2's storage and the AI provider. Page images come from `pdf-parse`'s own image extractor rather than by rasterizing pages, so no native canvas dependency has to survive a deploy; a scanned page *is* one full-page image, so pulling it out is both faithful and much cheaper than rendering.
+
+**Why not a cloud OCR (Google Vision, Azure):** they read Thai markedly better, and they cost money per page and need another account and key. This is one person's collection on a free instance, and measured on real files Tesseract is good enough for the job it has: a clean scanned book came back as accurate Thai with tone marks intact ("มหาบทวัน มหาบทยาม", 11 pages, 21,897 characters in 25s), and its Q&A went from refusing every question to answering them from the text. Decorative poster type is weaker — tone marks and vowels drop ("แก้กำลัง" → "แกกาลง", confidence ~88) — which makes those a good search index and a poor transcript. That is the right trade for search; if exact transcription is ever wanted, a second `OcrAdapter` is one file and one env var.
+
+**Consequence:** OCR is always a last resort, never a first one. A file that carries its own text layer never reaches it (`isTextLayerThin` judges by characters *per page*, so a scan carrying only a scanner header still counts as thin). Everything is bounded — page cap, pixel cap, byte cap, per-file time budget — because this shares half a CPU with the site itself. Three scans of 180–250MB are over the byte cap and stay text-less unless run deliberately with `scripts/backfillOcr.ts --max-mb`.

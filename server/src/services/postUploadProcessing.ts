@@ -2,8 +2,10 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/client";
 import { libraryFiles } from "../db/schema";
 import { classifyDocumentType } from "../domain/classifyDocumentType";
+import { isOcrableImage, isTextLayerThin } from "../domain/needsOcr";
 import { storageAdapter } from "../storage/index";
 import { extractOfficeText, hasExtractableText } from "./officeText";
+import { ocrEnabled } from "../ocr/index";
 
 /**
  * Everything expensive that happens to a newly uploaded PDF — text extraction
@@ -22,6 +24,11 @@ import { extractOfficeText, hasExtractableText } from "./officeText";
  * it is saved; the extras appear a little later. If the process dies partway,
  * the file still exists and only its extras are missing — the failure mode is
  * degraded, not lost.
+ *
+ * OCR is the last resort in that chain, and only ever a last resort: a file
+ * that carries its own text is never sent to it. It exists for the half of
+ * this library that is pictures of text — the exported posters and the
+ * scanned books — which were otherwise unsearchable and unaskable.
  */
 
 /** Bytes above which text extraction is skipped. Extraction is comparatively light — this is a backstop, not a tuning knob. */
@@ -41,6 +48,15 @@ const TEXT_EXTRACTION_MAX_BYTES = Number(process.env.TEXT_EXTRACTION_MAX_BYTES ?
 const PREVIEW_COMPRESSION_MAX_BYTES = Number(process.env.PREVIEW_COMPRESSION_MAX_BYTES ?? 25 * 1024 * 1024);
 
 const PREVIEW_WORTHY_MIN_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Bytes above which OCR is skipped. Between the extraction cap and the
+ * compression one: OCR holds a single page image at a time rather than the
+ * whole document, so it is nowhere near as memory-hungry as compression — but
+ * a 200MB scan would still take hours of a half CPU for a text layer nobody is
+ * waiting for.
+ */
+const OCR_MAX_BYTES = Number(process.env.OCR_MAX_BYTES ?? 60 * 1024 * 1024);
 
 /**
  * One at a time, always. Two large books processed concurrently would each
@@ -98,13 +114,31 @@ export async function processUploadedFile(fileId: string, options: PostUploadOpt
     return;
   }
 
+  // A poster exported as PNG is text as far as a reader is concerned and
+  // nothing at all as far as search is concerned. OCR is the only way in.
+  if (isOcrableImage(file.mimeType)) {
+    if (!ocrEnabled || bytes.byteLength > OCR_MAX_BYTES) return;
+    try {
+      const { ocrImage } = await import("./ocrText");
+      const result = await ocrImage(bytes);
+      if (result.pagesRead > 0) {
+        await db.update(libraryFiles).set({ extractedText: result.text }).where(eq(libraryFiles.id, fileId));
+      }
+    } catch {
+      // An image OCR cannot read stays exactly as searchable as it was before.
+    }
+    return;
+  }
+
   if (file.mimeType !== "application/pdf") return;
 
   if (bytes.byteLength <= TEXT_EXTRACTION_MAX_BYTES) {
+    let textLayerIsThin = false;
     try {
       const { inspectPdf } = await import("./pdfMetadata");
       const inspection = await inspectPdf(bytes);
       const detectedType = classifyDocumentType(file.mimeType, file.originalName, inspection.pageOrientation);
+      textLayerIsThin = isTextLayerThin(inspection.fullText, inspection.pageCount);
       await db
         .update(libraryFiles)
         .set({
@@ -115,7 +149,23 @@ export async function processUploadedFile(fileId: string, options: PostUploadOpt
         })
         .where(eq(libraryFiles.id, fileId));
     } catch {
-      // A malformed or encrypted PDF simply has no text to offer.
+      // A malformed or encrypted PDF has no text layer to offer — which is
+      // itself a reason to try reading the pages as pictures.
+      textLayerIsThin = true;
+    }
+
+    // Only now, once the cheap path has been given its chance and come back
+    // with almost nothing: this book is a stack of scans.
+    if (textLayerIsThin && ocrEnabled && bytes.byteLength <= OCR_MAX_BYTES) {
+      try {
+        const { ocrPdf } = await import("./ocrText");
+        const result = await ocrPdf(bytes);
+        if (result.pagesRead > 0) {
+          await db.update(libraryFiles).set({ extractedText: result.text }).where(eq(libraryFiles.id, fileId));
+        }
+      } catch {
+        // A scan OCR cannot read is left as it was: findable by title, not by content.
+      }
     }
   }
 
