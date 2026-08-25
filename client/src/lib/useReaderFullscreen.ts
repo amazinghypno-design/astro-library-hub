@@ -119,3 +119,13 @@ export function useReaderFullscreen(elementRef: RefObject<HTMLElement | null>, o
 
   return { isFullscreen, enter, exit, toggle };
 }
+
+/**
+ * What a reader exposes to the page around it, so a "read fullscreen" button
+ * outside the reader opens the reader's OWN fullscreen — the one that keeps
+ * the pen, highlighter and capture toolbar — rather than handing the raw file
+ * to the browser's built-in viewer, which has none of them.
+ */
+export interface ReaderHandle {
+  enterFullscreen: () => void;
+}

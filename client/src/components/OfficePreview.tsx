@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { IconBookmark, IconCamera, IconCollapse, IconExpand, IconHighlighter, IconPen, IconSearch, IconTrash, IconUndo } from "./icons";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { IconBookmark, IconCamera, IconChevronDown, IconChevronUp, IconCollapse, IconExpand, IconPen, IconSearch, IconTrash, IconUndo } from "./icons";
 import { clearHighlights, focusMatch, highlightMatches } from "../lib/searchInPreview";
 import { renderElementRegionToCanvas } from "../lib/elementToPng";
-import { useReaderFullscreen } from "../lib/useReaderFullscreen";
+import { useReaderFullscreen, type ReaderHandle } from "../lib/useReaderFullscreen";
 import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
 import LandscapeDocumentHint from "./LandscapeDocumentHint";
@@ -14,11 +14,15 @@ import {
   getDrawings,
   getLastPage,
   removeDrawingLocal,
+  markLeftBy,
   saveLastPage,
   toggleBookmark,
   type Drawing,
   type DrawingPoint,
+  type DrawToolId,
 } from "../lib/readingProgress";
+import { DRAW_TOOLS, PEN_COLORS, paletteFor, strokeWidthFor } from "../lib/drawTools";
+import { strokesUnderEraser } from "../lib/strokeGeometry";
 
 interface Sheet {
   name: string;
@@ -47,11 +51,6 @@ const MAX_ZOOM = 2.5;
 const ZOOM_STEP = 0.25;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
 
-// Fractions of stage width, matching the PDF reader so a stroke has the same
-// weight whichever kind of file it is drawn on.
-const TOOL_WIDTH: Record<Drawing["tool"], number> = { pen: 0.0035, highlighter: 0.014 };
-const PEN_COLORS = ["#1a1a2e", "#dc2626", "#2563eb", "#16a34a"];
-const HIGHLIGHTER_COLORS = ["#facc15", "#f472b6", "#4ade80", "#60a5fa"];
 
 /**
  * A reader for Word and Excel previews, with the same support a book gets in
@@ -68,7 +67,7 @@ const HIGHLIGHTER_COLORS = ["#facc15", "#f472b6", "#4ade80", "#60a5fa"];
  * if zooming reflowed the text, every saved annotation would drift away from
  * the words it was drawn over.
  */
-export default function OfficePreview(props: OfficePreviewProps) {
+const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function OfficePreview(props, ref) {
   const { fileId, title } = props;
   const sheets = props.kind === "xlsx" ? props.sheets : null;
   const [activeSheet, setActiveSheet] = useState(0);
@@ -87,10 +86,13 @@ export default function OfficePreview(props: OfficePreviewProps) {
   const [bookmarks, setBookmarks] = useState<number[]>([]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
+  const drawingsRef = useRef<Drawing[]>([]);
   const [drawToolbarOpen, setDrawToolbarOpen] = useState(false);
-  const [activeTool, setActiveTool] = useState<Drawing["tool"] | null>(null);
+  const [activeTool, setActiveTool] = useState<DrawToolId | null>(null);
   const [drawColor, setDrawColor] = useState(PEN_COLORS[0]);
   const [capturing, setCapturing] = useState(false);
+  // Fullscreen only — see the same note in PdfReader.
+  const [toolbarsHidden, setToolbarsHidden] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [jumpInput, setJumpInput] = useState("");
   const [query, setQuery] = useState("");
@@ -121,8 +123,15 @@ export default function OfficePreview(props: OfficePreviewProps) {
   const showLandscapeHint = !isFullscreen && isTouchDevice && isLandscapeDocument;
 
   useEffect(() => {
-    if (!isFullscreen) setRotateHintDismissed(false);
+    if (!isFullscreen) {
+      setRotateHintDismissed(false);
+      setToolbarsHidden(false);
+    }
   }, [isFullscreen]);
+
+  // Lets the page's "อ่านเต็มจอ" button open this reader's own fullscreen,
+  // which keeps the pen, highlighter and capture toolbar on screen.
+  useImperativeHandle(ref, () => ({ enterFullscreen }), [enterFullscreen]);
 
   // --- sizing -------------------------------------------------------------
 
@@ -238,6 +247,10 @@ export default function OfficePreview(props: OfficePreviewProps) {
 
   // --- drawing ------------------------------------------------------------
 
+  useEffect(() => {
+    drawingsRef.current = drawings;
+  }, [drawings]);
+
   /** Pointer position in stage coordinates, independent of zoom and scroll. */
   function toStagePoint(e: React.PointerEvent): { stageX: number; stageY: number } | null {
     const canvas = drawCanvasRef.current;
@@ -254,10 +267,11 @@ export default function OfficePreview(props: OfficePreviewProps) {
     if (!point) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const page = Math.floor(point.stageY / virtualPageHeight) + 1;
-    strokeRef.current = {
-      page,
-      points: [{ x: point.stageX / stageWidth, y: (point.stageY - (page - 1) * virtualPageHeight) / virtualPageHeight }],
-    };
+    const pagePoint = { x: point.stageX / stageWidth, y: (point.stageY - (page - 1) * virtualPageHeight) / virtualPageHeight };
+    strokeRef.current = { page, points: [pagePoint] };
+    // The eraser bites as it is dragged rather than on release, so a tap
+    // straight onto a stroke rubs it out without having to move first.
+    if (activeTool === "eraser") eraseAt(page, pagePoint);
   }
 
   function onPointerMove(e: React.PointerEvent) {
@@ -265,29 +279,62 @@ export default function OfficePreview(props: OfficePreviewProps) {
     if (!stroke || !activeTool) return;
     const point = toStagePoint(e);
     if (!point) return;
-    stroke.points.push({
+    const pagePoint = {
       x: point.stageX / stageWidth,
       y: (point.stageY - (stroke.page - 1) * virtualPageHeight) / virtualPageHeight,
-    });
+    };
+    if (activeTool === "eraser") {
+      eraseAt(stroke.page, pagePoint);
+      return;
+    }
+    // A ruler keeps only where the stroke started and where the pointer is now,
+    // so what lands on the page is the straight line between the two, however
+    // the hand wobbled on the way there.
+    if (activeTool === "ruler") stroke.points = [stroke.points[0], pagePoint];
+    else stroke.points.push(pagePoint);
     redraw();
   }
 
   function onPointerUp() {
     const stroke = strokeRef.current;
     strokeRef.current = null;
-    if (!stroke || !activeTool || !fileId || stroke.points.length < 2) {
+    // The eraser leaves nothing behind — the deleting already happened as the
+    // pointer moved.
+    if (!stroke || !activeTool || activeTool === "eraser" || !fileId || stroke.points.length < 2) {
       redraw();
       return;
     }
     setDrawings(
       addDrawingLocal(fileId, {
         pageNumber: stroke.page,
-        tool: activeTool,
+        // A ruler stroke is stored as the pen stroke it is: straightening
+        // happened while it was drawn, and nothing downstream needs to know.
+        tool: markLeftBy(activeTool),
         color: drawColor,
-        strokeWidth: TOOL_WIDTH[activeTool],
+        strokeWidth: strokeWidthFor(activeTool),
         points: stroke.points,
       }),
     );
+  }
+
+  /**
+   * Erasing deletes whole strokes rather than nibbling holes in them — the ink
+   * is stored as strokes, so a partial rub-out would have to split one in two.
+   * The hit test reads from a ref and trims it as it goes, because a drag fires
+   * this many times per second, well inside a single React render.
+   */
+  function eraseAt(page: number, point: DrawingPoint) {
+    if (!fileId) return;
+    const hit = strokesUnderEraser(
+      drawingsRef.current.filter((d) => d.pageNumber === page),
+      point,
+      virtualPageHeight / stageWidth,
+    );
+    if (hit.length === 0) return;
+    const gone = new Set(hit.map((d) => d.id));
+    drawingsRef.current = drawingsRef.current.filter((d) => !gone.has(d.id));
+    setDrawings(drawingsRef.current);
+    for (const stroke of hit) removeDrawingLocal(fileId, stroke.id);
   }
 
   function undoLastDrawing() {
@@ -335,8 +382,12 @@ export default function OfficePreview(props: OfficePreviewProps) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     for (const d of drawings) paintStroke(ctx, d, dpr);
     const live = strokeRef.current;
-    if (live && activeTool) {
-      paintStroke(ctx, { pageNumber: live.page, tool: activeTool, color: drawColor, strokeWidth: TOOL_WIDTH[activeTool], points: live.points }, dpr);
+    if (live && activeTool && activeTool !== "eraser") {
+      paintStroke(
+        ctx,
+        { pageNumber: live.page, tool: markLeftBy(activeTool), color: drawColor, strokeWidth: strokeWidthFor(activeTool), points: live.points },
+        dpr,
+      );
     }
   }, [contentHeight, stageWidth, drawings, activeTool, drawColor, paintStroke]);
 
@@ -411,7 +462,19 @@ export default function OfficePreview(props: OfficePreviewProps) {
   }
 
   const isCurrentPageBookmarked = useMemo(() => bookmarks.includes(currentPage), [bookmarks, currentPage]);
-  const toolColors = activeTool === "highlighter" ? HIGHLIGHTER_COLORS : PEN_COLORS;
+  const toolColors = paletteFor(activeTool ?? "pen");
+  const toolsVisible = !(isFullscreen && toolbarsHidden);
+
+  // Tapping the tool you are already holding puts it down again, which is how
+  // this toolbar has always worked — with it down, a finger scrolls the
+  // document instead of drawing on it. Each tool also remembers a sensible
+  // colour, so the highlighter never comes up in near-black.
+  function pickTool(tool: DrawToolId) {
+    setActiveTool((current) => (current === tool ? null : tool));
+    if (tool === "eraser") return;
+    const palette = paletteFor(tool);
+    setDrawColor((c) => (palette.includes(c) ? c : palette[0]));
+  }
 
   return (
     <div
@@ -495,158 +558,198 @@ export default function OfficePreview(props: OfficePreviewProps) {
 
       {/* The controls sit BELOW the document, within thumb reach on a phone
           and out of the way of the first line of text. In fullscreen they also
-          clear the home indicator via the safe-area inset. */}
-      <div
-        className={`reader-toolbar bg-white border-t border-navy-900/10 px-4 py-3 space-y-2 text-sm ${isFullscreen ? "shrink-0" : ""}`}
-        style={isFullscreen ? { paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" } : undefined}
-      >
-        <div className="reader-row flex flex-col sm:flex-row gap-2 sm:items-center">
-          <div className="reader-search relative flex-1">
-            <IconSearch width={15} height={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-navy-700/40" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") goToMatch(e.shiftKey ? -1 : 1);
-              }}
-              placeholder="ค้นหาข้อความในไฟล์นี้..."
-              className="w-full rounded-lg border border-navy-900/15 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gold-400/60"
-            />
+          clear the home indicator via the safe-area inset — and can be folded
+          away entirely, so the document finally gets the whole screen it went
+          fullscreen for. The page counter that replaces them brings the tools
+          back in one tap. */}
+      {toolsVisible && (
+        <div
+          className={`reader-toolbar bg-white border-t border-navy-900/10 px-4 py-3 space-y-2 text-sm ${isFullscreen ? "shrink-0" : ""}`}
+          style={isFullscreen ? { paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" } : undefined}
+        >
+          <div className="reader-row flex flex-col sm:flex-row gap-2 sm:items-center">
+            <div className="reader-search relative flex-1">
+              <IconSearch width={15} height={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-navy-700/40" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") goToMatch(e.shiftKey ? -1 : 1);
+                }}
+                placeholder="ค้นหาข้อความในไฟล์นี้..."
+                className="w-full rounded-lg border border-navy-900/15 pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-gold-400/60"
+              />
+            </div>
+            {query.trim() && (
+              <div className="flex items-center gap-2 text-sm text-navy-700/70 shrink-0">
+                <span className="tabular-nums">{matchCount > 0 ? `${currentMatch + 1}/${matchCount}` : "ไม่พบ"}</span>
+                <button type="button" onClick={() => goToMatch(-1)} disabled={matchCount === 0} className="px-2 py-1 rounded-md border border-navy-900/15 hover:border-gold-500 disabled:opacity-30" aria-label="ผลลัพธ์ก่อนหน้า">
+                  ↑
+                </button>
+                <button type="button" onClick={() => goToMatch(1)} disabled={matchCount === 0} className="px-2 py-1 rounded-md border border-navy-900/15 hover:border-gold-500 disabled:opacity-30" aria-label="ผลลัพธ์ถัดไป">
+                  ↓
+                </button>
+              </div>
+            )}
           </div>
-          {query.trim() && (
-            <div className="flex items-center gap-2 text-sm text-navy-700/70 shrink-0">
-              <span className="tabular-nums">{matchCount > 0 ? `${currentMatch + 1}/${matchCount}` : "ไม่พบ"}</span>
-              <button type="button" onClick={() => goToMatch(-1)} disabled={matchCount === 0} className="px-2 py-1 rounded-md border border-navy-900/15 hover:border-gold-500 disabled:opacity-30" aria-label="ผลลัพธ์ก่อนหน้า">
-                ↑
+
+          <div className="reader-row flex flex-wrap items-center gap-2 text-sm">
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "ออกจากโหมดเต็มจอ" : "ดูแบบเต็มจอ"}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors ${
+                isFullscreen
+                  ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
+                  : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
+              }`}
+            >
+              {isFullscreen ? <IconCollapse width={15} height={15} /> : <IconExpand width={15} height={15} />}
+              <span className="reader-label">{isFullscreen ? "ออกเต็มจอ" : "เต็มจอ"}</span>
+            </button>
+            {isFullscreen && (
+              <button
+                type="button"
+                onClick={() => setToolbarsHidden(true)}
+                title="ซ่อนแถบเครื่องมือ ให้เหลือแต่หน้าเอกสาร"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
+              >
+                <IconChevronDown width={15} height={15} />
+                <span className="reader-label">ซ่อนเครื่องมือ</span>
               </button>
-              <button type="button" onClick={() => goToMatch(1)} disabled={matchCount === 0} className="px-2 py-1 rounded-md border border-navy-900/15 hover:border-gold-500 disabled:opacity-30" aria-label="ผลลัพธ์ถัดไป">
-                ↓
+            )}
+            <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={() => {
+                  manuallyZoomedRef.current = true;
+                  setZoom((z) => clampZoom(z - ZOOM_STEP));
+                }} disabled={zoom <= MIN_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ย่อ">
+                −
+              </button>
+              <span className="tabular-nums text-navy-700/70 w-12 text-center">{Math.round(zoom * 100)}%</span>
+              <button type="button" onClick={() => {
+                  manuallyZoomedRef.current = true;
+                  setZoom((z) => clampZoom(z + ZOOM_STEP));
+                }} disabled={zoom >= MAX_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ขยาย">
+                +
               </button>
             </div>
-          )}
-        </div>
 
-        <div className="reader-row flex flex-wrap items-center gap-2 text-sm">
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            title={isFullscreen ? "ออกจากโหมดเต็มจอ" : "ดูแบบเต็มจอ"}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors ${
-              isFullscreen
-                ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
-                : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
-            }`}
-          >
-            {isFullscreen ? <IconCollapse width={15} height={15} /> : <IconExpand width={15} height={15} />}
-            <span className="reader-label">{isFullscreen ? "ออกเต็มจอ" : "เต็มจอ"}</span>
-          </button>
-          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-          <div className="flex items-center gap-1">
-            <button type="button" onClick={() => {
-                manuallyZoomedRef.current = true;
-                setZoom((z) => clampZoom(z - ZOOM_STEP));
-              }} disabled={zoom <= MIN_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ย่อ">
-              −
-            </button>
-            <span className="tabular-nums text-navy-700/70 w-12 text-center">{Math.round(zoom * 100)}%</span>
-            <button type="button" onClick={() => {
-                manuallyZoomedRef.current = true;
-                setZoom((z) => clampZoom(z + ZOOM_STEP));
-              }} disabled={zoom >= MAX_ZOOM} className="w-7 h-7 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 disabled:opacity-30" aria-label="ขยาย">
-              +
+            <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+            <span className="text-navy-700/55 tabular-nums">
+              หน้า {currentPage}/{pageCount}
+            </span>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const n = Number(jumpInput);
+                if (Number.isFinite(n) && n >= 1) goToPage(n);
+              }}
+              className="flex items-center gap-1.5"
+            >
+              <input type="number" min={1} value={jumpInput} onChange={(e) => setJumpInput(e.target.value)} className="w-16 px-2 py-1 rounded-lg border border-navy-900/15 tabular-nums focus:outline-none focus:ring-2 focus:ring-gold-400/60" aria-label="ไปหน้า" />
+              <button type="submit" className="px-3 py-1 rounded-lg border border-navy-900/15 font-medium text-navy-800 hover:border-gold-500 hover:bg-gold-400/5">
+                ไป
+              </button>
+            </form>
+
+            {fileId && (
+              <>
+                <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+                <button type="button" onClick={() => setDrawToolbarOpen((v) => !v)} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${drawToolbarOpen ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"}`}>
+                  <IconPen width={14} height={14} /> <span className="reader-label">เครื่องมือวาด</span>
+                </button>
+                <button type="button" onClick={onToggleBookmark} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${isCurrentPageBookmarked ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"}`}>
+                  <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
+                  <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
+                </button>
+                {bookmarks.length > 0 && (
+                  <div className="relative">
+                    <button type="button" onClick={() => setBookmarksOpen((v) => !v)} className="px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5">
+                      ที่คั่นไว้ ({bookmarks.length})
+                    </button>
+                    {bookmarksOpen && (
+                      <div className="absolute right-0 mt-1 z-10 bg-white border border-navy-900/10 rounded-xl shadow-card py-1 min-w-[9rem] max-h-56 overflow-auto">
+                        {bookmarks.map((page) => (
+                          <button
+                            key={page}
+                            type="button"
+                            onClick={() => {
+                              goToPage(page);
+                              setBookmarksOpen(false);
+                            }}
+                            className="w-full text-left px-3 py-1.5 hover:bg-gold-400/10 flex items-center gap-2"
+                          >
+                            <IconBookmark width={12} height={12} className="text-gold-500 shrink-0" fill="currentColor" />
+                            หน้า {page}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+            <button type="button" onClick={captureCurrentPage} disabled={capturing} title="แคปหน้านี้เป็นรูปภาพเพื่อส่งให้คนอื่น" className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40">
+              <IconCamera width={15} height={15} /> <span className="reader-label">{capturing ? "กำลังแคป..." : "แคปหน้านี้"}</span>
             </button>
           </div>
 
-          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-          <span className="text-navy-700/55 tabular-nums">
-            หน้า {currentPage}/{pageCount}
-          </span>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const n = Number(jumpInput);
-              if (Number.isFinite(n) && n >= 1) goToPage(n);
-            }}
-            className="flex items-center gap-1.5"
-          >
-            <input type="number" min={1} value={jumpInput} onChange={(e) => setJumpInput(e.target.value)} className="w-16 px-2 py-1 rounded-lg border border-navy-900/15 tabular-nums focus:outline-none focus:ring-2 focus:ring-gold-400/60" aria-label="ไปหน้า" />
-            <button type="submit" className="px-3 py-1 rounded-lg border border-navy-900/15 font-medium text-navy-800 hover:border-gold-500 hover:bg-gold-400/5">
-              ไป
-            </button>
-          </form>
-
-          {fileId && (
-            <>
-              <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-              <button type="button" onClick={() => setDrawToolbarOpen((v) => !v)} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${drawToolbarOpen ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"}`}>
-                <IconPen width={14} height={14} /> <span className="reader-label">เครื่องมือวาด</span>
-              </button>
-              <button type="button" onClick={onToggleBookmark} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${isCurrentPageBookmarked ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"}`}>
-                <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
-                <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
-              </button>
-              {bookmarks.length > 0 && (
-                <div className="relative">
-                  <button type="button" onClick={() => setBookmarksOpen((v) => !v)} className="px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5">
-                    ที่คั่นไว้ ({bookmarks.length})
-                  </button>
-                  {bookmarksOpen && (
-                    <div className="absolute right-0 mt-1 z-10 bg-white border border-navy-900/10 rounded-xl shadow-card py-1 min-w-[9rem] max-h-56 overflow-auto">
-                      {bookmarks.map((page) => (
-                        <button
-                          key={page}
-                          type="button"
-                          onClick={() => {
-                            goToPage(page);
-                            setBookmarksOpen(false);
-                          }}
-                          className="w-full text-left px-3 py-1.5 hover:bg-gold-400/10 flex items-center gap-2"
-                        >
-                          <IconBookmark width={12} height={12} className="text-gold-500 shrink-0" fill="currentColor" />
-                          หน้า {page}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+          {drawToolbarOpen && fileId && (
+            <div className="flex flex-wrap items-center gap-2 text-sm pt-1 border-t border-navy-900/[0.06]">
+              {DRAW_TOOLS.map(({ id, label, Icon, hint }) => (
+                <button key={id} type="button" onClick={() => pickTool(id)} title={hint} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border ${activeTool === id ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500"}`}>
+                  <Icon width={14} height={14} /> {label}
+                </button>
+              ))}
+              {/* The eraser has no colour of its own — a palette beside it would
+                  only suggest it erases one colour at a time. */}
+              {activeTool !== "eraser" && (
+                <div className="flex items-center gap-1.5">
+                  {toolColors.map((c) => (
+                    <button key={c} type="button" onClick={() => setDrawColor(c)} style={{ backgroundColor: c }} className={`w-5 h-5 rounded-full border border-navy-900/10 transition-transform ${drawColor === c ? "ring-2 ring-offset-2 ring-gold-500" : "hover:scale-105"}`} aria-label={`สี ${c}`} />
+                  ))}
                 </div>
               )}
-            </>
-          )}
-
-          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-          <button type="button" onClick={captureCurrentPage} disabled={capturing} title="แคปหน้านี้เป็นรูปภาพเพื่อส่งให้คนอื่น" className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40">
-            <IconCamera width={15} height={15} /> <span className="reader-label">{capturing ? "กำลังแคป..." : "แคปหน้านี้"}</span>
-          </button>
-        </div>
-
-        {drawToolbarOpen && fileId && (
-          <div className="flex flex-wrap items-center gap-2 text-sm pt-1 border-t border-navy-900/[0.06]">
-            <button type="button" onClick={() => setActiveTool((t) => (t === "pen" ? null : "pen"))} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border ${activeTool === "pen" ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500"}`}>
-              <IconPen width={14} height={14} /> ปากกา
-            </button>
-            <button type="button" onClick={() => setActiveTool((t) => (t === "highlighter" ? null : "highlighter"))} className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border ${activeTool === "highlighter" ? "border-gold-500/50 text-gold-700 bg-gold-400/10" : "border-navy-900/15 text-navy-700 hover:border-gold-500"}`}>
-              <IconHighlighter width={14} height={14} /> ปากกาเน้น
-            </button>
-            <div className="flex items-center gap-1.5">
-              {toolColors.map((c) => (
-                <button key={c} type="button" onClick={() => setDrawColor(c)} style={{ backgroundColor: c }} className={`w-5 h-5 rounded-full border border-navy-900/10 transition-transform ${drawColor === c ? "ring-2 ring-offset-2 ring-gold-500" : "hover:scale-105"}`} aria-label={`สี ${c}`} />
-              ))}
+              <button type="button" onClick={undoLastDrawing} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500">
+                <IconUndo width={14} height={14} /> ย้อนกลับ
+              </button>
+              <button type="button" onClick={clearCurrentPageDrawings} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-red-400 hover:text-red-700">
+                <IconTrash width={14} height={14} /> ล้างหน้านี้
+              </button>
+              <span className="text-navy-700/50 text-xs">
+                {activeTool === "eraser" ? "แตะค้างแล้วลากผ่านเส้นที่ต้องการลบ" : "แตะค้างแล้วลากบนเอกสารเพื่อเขียน"}
+              </span>
             </div>
-            <button type="button" onClick={undoLastDrawing} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500">
-              <IconUndo width={14} height={14} /> ย้อนกลับ
-            </button>
-            <button type="button" onClick={clearCurrentPageDrawings} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-red-400 hover:text-red-700">
-              <IconTrash width={14} height={14} /> ล้างหน้านี้
-            </button>
-            <span className="text-navy-700/50 text-xs">แตะค้างแล้วลากบนเอกสารเพื่อเขียน</span>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
+
+      {isFullscreen && toolbarsHidden && (
+        <button
+          type="button"
+          onClick={() => setToolbarsHidden(false)}
+          title="แสดงแถบเครื่องมือ"
+          className="absolute right-4 z-20 inline-flex items-center gap-2 rounded-full bg-navy-950/85 text-ivory pl-4 pr-3 py-2 text-sm font-medium shadow-card-hover backdrop-blur-sm"
+          style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}
+        >
+          <span className="tabular-nums">
+            {currentPage}
+            <span className="text-ivory/35 mx-1">/</span>
+            {pageCount}
+          </span>
+          <IconChevronUp width={16} height={16} className="text-gold-400" />
+        </button>
+      )}
 
       {showRotateHint && (
         <RotateDeviceOverlay onDismiss={() => setRotateHintDismissed(true)} onExitFullscreen={exitFullscreen} />
       )}
     </div>
   );
-}
+});
+
+export default OfficePreview;

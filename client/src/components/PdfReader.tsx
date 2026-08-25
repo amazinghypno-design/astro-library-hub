@@ -1,11 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { IconBookmark, IconCamera, IconChevronLeft, IconChevronRight, IconCollapse, IconExpand, IconHighlighter, IconPen, IconTrash, IconUndo } from "./icons";
+import {
+  IconBookmark,
+  IconCamera,
+  IconChevronDown,
+  IconChevronLeft,
+  IconChevronRight,
+  IconChevronUp,
+  IconCollapse,
+  IconExpand,
+  IconHighlighter,
+  IconPen,
+  IconTrash,
+  IconUndo,
+} from "./icons";
 import { toThaiPdfErrorMessage } from "../lib/errorMessages";
 import { safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
-import { useReaderFullscreen } from "../lib/useReaderFullscreen";
+import { useReaderFullscreen, type ReaderHandle } from "../lib/useReaderFullscreen";
 import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
 import LandscapeDocumentHint from "./LandscapeDocumentHint";
@@ -18,13 +31,17 @@ import {
   getHighlights,
   getLastPage,
   removeDrawingLocal,
+  markLeftBy,
   removeHighlightLocal,
   saveLastPage,
   toggleBookmark,
   type Drawing,
   type DrawingPoint,
+  type DrawToolId,
   type Highlight,
 } from "../lib/readingProgress";
+import { DRAW_TOOLS, PEN_COLORS, paletteFor, strokeWidthFor } from "../lib/drawTools";
+import { strokesUnderEraser } from "../lib/strokeGeometry";
 import { trpc } from "../lib/trpc";
 
 /** A selection the reader just made, waiting for the "ไฮไลต์" button to be pressed. */
@@ -51,13 +68,19 @@ const MAX_ZOOM = 2.5;
 const MAX_WIDTH_PORTRAIT = 760;
 const MAX_WIDTH_LANDSCAPE = 1100;
 
-// Fraction of the page's own width — not pixels — so a stroke stays the
-// right relative thickness at any zoom level or screen size.
-const TOOL_WIDTH: Record<Drawing["tool"], number> = { pen: 0.0035, highlighter: 0.014 };
-const PEN_COLORS = ["#1a1a2e", "#dc2626", "#2563eb", "#16a34a"];
-const HIGHLIGHTER_COLORS = ["#facc15", "#f472b6", "#4ade80", "#60a5fa"];
 const ZOOM_STEP = 0.25;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
+
+interface PdfReaderProps {
+  url: string;
+  downloadUrl?: string;
+  /** Enables continue-reading + bookmarks, keyed by this id. Omit to disable both. */
+  fileId?: string;
+  /** "PDF page = table-of-contents page + pageOffset" — see admin's "เลขหน้าอ้างอิง (สารบัญ)" field. */
+  pageOffset?: number;
+  /** Used to name/caption a captured page image. Omit to fall back to a generic name. */
+  title?: string;
+}
 
 /**
  * A real PDF.js-based reader instead of relying on the browser's own
@@ -69,22 +92,10 @@ const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.roun
  * time — each page virtualizes its own canvas in/out via IntersectionObserver
  * so a 300+ page book doesn't render everything at once.
  */
-export default function PdfReader({
-  url,
-  downloadUrl,
-  fileId,
-  pageOffset = 0,
-  title,
-}: {
-  url: string;
-  downloadUrl?: string;
-  /** Enables continue-reading + bookmarks, keyed by this id. Omit to disable both. */
-  fileId?: string;
-  /** "PDF page = table-of-contents page + pageOffset" — see admin's "เลขหน้าอ้างอิง (สารบัญ)" field. */
-  pageOffset?: number;
-  /** Used to name/caption a captured page image. Omit to fall back to a generic name. */
-  title?: string;
-}) {
+const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
+  { url, downloadUrl, fileId, pageOffset = 0, title },
+  ref,
+) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
@@ -110,11 +121,15 @@ export default function PdfReader({
   const [highlightsOpen, setHighlightsOpen] = useState(false);
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
-  const [drawTool, setDrawTool] = useState<Drawing["tool"]>("pen");
+  const drawingsRef = useRef<Drawing[]>([]);
+  const [drawTool, setDrawTool] = useState<DrawToolId>("pen");
   const [drawColor, setDrawColor] = useState(PEN_COLORS[0]);
   const [drawMode, setDrawMode] = useState(false);
   const [drawToolbarOpen, setDrawToolbarOpen] = useState(false);
   const [capturingPage, setCapturingPage] = useState(false);
+  // Fullscreen only: lets the reader put every bar away and have the whole
+  // screen be the page, with one tap to bring the tools back.
+  const [toolbarsHidden, setToolbarsHidden] = useState(false);
 
   // Logged in (today: only the site owner, via /admin/login) → progress and
   // bookmarks sync through the account across every device they log into.
@@ -222,8 +237,35 @@ export default function PdfReader({
   // Offer the hint again next time: a reader who dismissed it once while
   // standing on a train may well want it on the next document.
   useEffect(() => {
-    if (!isFullscreen) setRotateHintDismissed(false);
+    if (!isFullscreen) {
+      setRotateHintDismissed(false);
+      // Hiding the bars is a fullscreen affordance; the reader needs its
+      // toolbar back the moment it is a panel on the page again.
+      setToolbarsHidden(false);
+    }
   }, [isFullscreen]);
+
+  // The page's own "อ่านเต็มจอ" button enters THIS fullscreen, so the reader
+  // keeps its pen, highlighter and capture toolbar. Pressed before the PDF has
+  // finished loading, it is remembered and applied on the first ready render —
+  // the native fullscreen call will have lost its user gesture by then, but the
+  // hook's CSS layer fills the screen either way.
+  const pendingFullscreenRef = useRef(false);
+  useImperativeHandle(
+    ref,
+    () => ({
+      enterFullscreen: () => {
+        if (status === "ready") enterFullscreen();
+        else pendingFullscreenRef.current = true;
+      },
+    }),
+    [status, enterFullscreen],
+  );
+  useEffect(() => {
+    if (status !== "ready" || !pendingFullscreenRef.current) return;
+    pendingFullscreenRef.current = false;
+    enterFullscreen();
+  }, [status, enterFullscreen]);
 
   useEffect(() => {
     if (status !== "ready" || !scrollRef.current) return;
@@ -419,16 +461,42 @@ export default function PdfReader({
 
   function saveDrawing(pageNumber: number, points: DrawingPoint[]) {
     if (!fileId) return;
-    const width = TOOL_WIDTH[drawTool];
+    const width = strokeWidthFor(drawTool);
+    // A ruler stroke is stored as the pen stroke it is: straightening happened
+    // while it was drawn, and nothing downstream needs to know about it.
+    const tool = markLeftBy(drawTool);
     if (isLoggedIn) {
       addDrawingMutation.mutate(
-        { fileId, page: pageNumber, tool: drawTool, color: drawColor, strokeWidth: width, points },
+        { fileId, page: pageNumber, tool, color: drawColor, strokeWidth: width, points },
         { onSuccess: (created) => setDrawings((prev) => [...prev, created]) },
       );
     } else {
-      setDrawings(addDrawingLocal(fileId, { pageNumber, tool: drawTool, color: drawColor, strokeWidth: width, points }));
+      setDrawings(addDrawingLocal(fileId, { pageNumber, tool, color: drawColor, strokeWidth: width, points }));
     }
   }
+
+  // Erasing deletes whole strokes rather than nibbling holes in them: the ink
+  // is stored as strokes, so a partial rub-out would have to split one into
+  // two, and "the line I just drew goes away" is what people expect anyway.
+  //
+  // The hit test reads the ink from a ref and trims that ref as it goes: a drag
+  // fires this many times per second, well inside a single React render, and
+  // without it the same stroke would be deleted again on every one of them.
+  const eraseAt = useCallback(
+    (pageNumber: number, point: DrawingPoint, pageAspect: number) => {
+      if (!fileId) return;
+      const hit = strokesUnderEraser(drawingsRef.current.filter((d) => d.pageNumber === pageNumber), point, pageAspect);
+      if (hit.length === 0) return;
+      const gone = new Set(hit.map((d) => d.id));
+      drawingsRef.current = drawingsRef.current.filter((d) => !gone.has(d.id));
+      setDrawings(drawingsRef.current);
+      for (const stroke of hit) {
+        if (isLoggedIn) removeDrawingMutation.mutate({ id: stroke.id });
+        else removeDrawingLocal(fileId, stroke.id);
+      }
+    },
+    [fileId, isLoggedIn, removeDrawingMutation],
+  );
 
   function deleteDrawing(id: string) {
     if (!fileId) return;
@@ -572,7 +640,22 @@ export default function PdfReader({
     setPendingSelection(null);
   }
 
+  useEffect(() => {
+    drawingsRef.current = drawings;
+  }, [drawings]);
+
   const isCurrentPageBookmarked = bookmarks.includes(currentPage);
+  const toolsVisible = !(isFullscreen && toolbarsHidden);
+
+  // Each tool remembers a sensible colour: switching to the highlighter should
+  // not leave you painting in near-black, and switching back should not leave
+  // the pen writing in yellow.
+  function pickDrawTool(tool: DrawToolId) {
+    setDrawTool(tool);
+    if (tool === "eraser") return;
+    const palette = paletteFor(tool);
+    setDrawColor((c) => (palette.includes(c) ? c : palette[0]));
+  }
 
   if (status === "error") {
     return (
@@ -667,6 +750,7 @@ export default function PdfReader({
                 drawEnabled={!!fileId}
                 drawMode={drawMode}
                 onStrokeComplete={saveDrawing}
+                onErase={eraseAt}
               />
             ))}
         </div>
@@ -686,304 +770,338 @@ export default function PdfReader({
         </button>
       )}
 
-      {/* Placed below the scroll area (not above) so it stays within thumb reach on mobile. */}
-      <div className="flex items-center justify-center gap-5 sm:gap-8 py-3 bg-navy-950 text-ivory">
-        <button
-          type="button"
-          onClick={() => goToPage(currentPage - 1)}
-          disabled={currentPage <= 1}
-          aria-label="หน้าก่อนหน้า"
-          className="p-2 rounded-full transition-colors hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent"
-        >
-          <IconChevronLeft width={18} height={18} />
-        </button>
-        <span className="font-serif tabular-nums text-base tracking-wide">
-          หน้า <span className="text-gold-400 font-semibold">{currentPage}</span>
-          <span className="text-ivory/35 mx-1.5">/</span>
-          {numPages}
-        </span>
-        <button
-          type="button"
-          onClick={() => goToPage(currentPage + 1)}
-          disabled={!numPages || currentPage >= numPages}
-          aria-label="หน้าถัดไป"
-          className="p-2 rounded-full transition-colors hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent"
-        >
-          <IconChevronRight width={18} height={18} />
-        </button>
-      </div>
-
-      <div
-        className={`reader-toolbar flex flex-wrap items-center justify-center gap-2 sm:gap-3 py-2.5 px-3 bg-white border-t border-navy-900/[0.06] text-sm ${
-          isFullscreen ? "shrink-0" : ""
-        }`}
-        style={isFullscreen ? { paddingBottom: "max(0.625rem, env(safe-area-inset-bottom))" } : undefined}
-      >
-        <button
-          type="button"
-          onClick={toggleFullscreen}
-          title={isFullscreen ? "ออกจากโหมดเต็มจอ" : "ดูแบบเต็มจอ"}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors ${
-            isFullscreen
-              ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
-              : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
-          }`}
-        >
-          {isFullscreen ? <IconCollapse width={15} height={15} /> : <IconExpand width={15} height={15} />}
-          <span className="reader-label">{isFullscreen ? "ออกเต็มจอ" : "เต็มจอ"}</span>
-        </button>
-        <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-        <div className="flex items-center gap-1">
+      {/* Fullscreen exists to give the page the whole screen, and three bars of
+          chrome take a third of it back on a phone held sideways. So in
+          fullscreen every bar folds away together — and the page counter that
+          replaces them brings them back in one tap, so the pen and the
+          highlighter are never more than that one tap out of reach. */}
+      {toolsVisible && (
+        <>
+        {/* Placed below the scroll area (not above) so it stays within thumb reach on mobile. */}
+        <div className="flex items-center justify-center gap-5 sm:gap-8 py-3 bg-navy-950 text-ivory shrink-0">
           <button
             type="button"
-            onClick={zoomOut}
-            disabled={zoomLevel <= MIN_ZOOM}
-            aria-label="ซูมออก"
-            className="w-7 h-7 flex items-center justify-center rounded-lg border border-navy-900/15 text-navy-700 font-semibold hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-30 transition-colors"
+            onClick={() => goToPage(currentPage - 1)}
+            disabled={currentPage <= 1}
+            aria-label="หน้าก่อนหน้า"
+            className="p-2 rounded-full transition-colors hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent"
           >
-            −
+            <IconChevronLeft width={18} height={18} />
           </button>
+          <span className="font-serif tabular-nums text-base tracking-wide">
+            หน้า <span className="text-gold-400 font-semibold">{currentPage}</span>
+            <span className="text-ivory/35 mx-1.5">/</span>
+            {numPages}
+          </span>
           <button
             type="button"
-            onClick={resetZoom}
-            title="รีเซ็ตเป็น 100%"
-            className="w-12 text-center tabular-nums text-navy-700 hover:text-gold-700 transition-colors"
+            onClick={() => goToPage(currentPage + 1)}
+            disabled={!numPages || currentPage >= numPages}
+            aria-label="หน้าถัดไป"
+            className="p-2 rounded-full transition-colors hover:bg-white/10 disabled:opacity-25 disabled:hover:bg-transparent"
           >
-            {Math.round(zoomLevel * 100)}%
-          </button>
-          <button
-            type="button"
-            onClick={zoomIn}
-            disabled={zoomLevel >= MAX_ZOOM}
-            aria-label="ซูมเข้า"
-            className="w-7 h-7 flex items-center justify-center rounded-lg border border-navy-900/15 text-navy-700 font-semibold hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-30 transition-colors"
-          >
-            +
+            <IconChevronRight width={18} height={18} />
           </button>
         </div>
-        {fileId && (
-          <>
-            <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-            <button
-              type="button"
-              onClick={() => setDrawToolbarOpen((v) => !v)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${
-                drawToolbarOpen
-                  ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
-                  : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
-              }`}
-            >
-              <IconPen width={14} height={14} />
-              <span className="reader-label">เครื่องมือวาด</span>
-            </button>
-          </>
-        )}
-        <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-        <button
-          type="button"
-          onClick={() => capturePage(currentPage)}
-          disabled={capturingPage}
-          title="แคปหน้านี้เป็นรูปภาพเพื่อส่งให้คนอื่น"
-          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40 transition-colors"
+
+        <div
+          className={`reader-toolbar flex flex-wrap items-center justify-center gap-2 sm:gap-3 py-2.5 px-3 bg-white border-t border-navy-900/[0.06] text-sm ${
+            isFullscreen ? "shrink-0" : ""
+          }`}
+          style={isFullscreen ? { paddingBottom: "max(0.625rem, env(safe-area-inset-bottom))" } : undefined}
         >
-          <IconCamera width={15} height={15} />
-          <span className="reader-label">{capturingPage ? "กำลังแคป..." : "แคปหน้านี้"}</span>
-        </button>
-        <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-        <form onSubmit={onJumpSubmit} className="flex items-center gap-1.5">
-          <label htmlFor="pdf-jump-input" className="reader-label text-navy-700/55 text-xs sm:text-sm">
-            ไปหน้า (สารบัญ)
-          </label>
-          <input
-            id="pdf-jump-input"
-            type="number"
-            min={1}
-            value={jumpInput}
-            onChange={(e) => setJumpInput(e.target.value)}
-            className="w-16 px-2 py-1 rounded-lg border border-navy-900/15 tabular-nums focus:outline-none focus:ring-2 focus:ring-gold-400/60 focus:border-gold-500"
-          />
-          <button
-            type="submit"
-            className="px-3 py-1 rounded-lg border border-navy-900/15 font-medium text-navy-800 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
-          >
-            ไป
-          </button>
-        </form>
-
-        {fileId && (
-          <>
-            <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
-            <button
-              type="button"
-              onClick={onToggleBookmark}
-              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${
-                isCurrentPageBookmarked
-                  ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
-                  : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
-              }`}
-            >
-              <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
-              <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
-            </button>
-            {bookmarks.length > 0 && (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setBookmarksOpen((v) => !v)}
-                  className="inline-flex items-center gap-1 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
-                >
-                  รายการที่คั่น
-                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-400/20 text-gold-700 text-xs font-semibold">
-                    {bookmarks.length}
-                  </span>
-                  <span className="text-navy-700/40 text-[10px]">{bookmarksOpen ? "▲" : "▼"}</span>
-                </button>
-                {bookmarksOpen && (
-                  <div className="absolute bottom-full mb-2 right-0 bg-white border border-navy-900/10 rounded-xl shadow-card-hover py-1.5 min-w-[150px] z-10">
-                    {bookmarks.map((p) => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => {
-                          goToPage(p);
-                          setBookmarksOpen(false);
-                        }}
-                        className="w-full text-left px-3.5 py-1.5 hover:bg-gold-400/5 text-navy-800 inline-flex items-center gap-2"
-                      >
-                        <IconBookmark width={12} height={12} className="text-gold-500 shrink-0" fill="currentColor" />
-                        หน้า {Math.max(1, p - pageOffset)}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            {highlights.length > 0 && (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setHighlightsOpen((v) => !v)}
-                  className="inline-flex items-center gap-1 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
-                >
-                  <IconHighlighter width={14} height={14} />
-                  ไฮไลต์
-                  <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-400/20 text-gold-700 text-xs font-semibold">
-                    {highlights.length}
-                  </span>
-                  <span className="text-navy-700/40 text-[10px]">{highlightsOpen ? "▲" : "▼"}</span>
-                </button>
-                {highlightsOpen && (
-                  <div className="absolute bottom-full mb-2 right-0 bg-white border border-navy-900/10 rounded-xl shadow-card-hover py-1.5 w-64 max-h-72 overflow-y-auto z-10">
-                    {[...highlights]
-                      .sort((a, b) => a.pageNumber - b.pageNumber)
-                      .map((h) => (
-                        <div key={h.id} className="group flex items-start gap-1 hover:bg-gold-400/5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              goToPage(h.pageNumber);
-                              setHighlightsOpen(false);
-                            }}
-                            className="flex-1 min-w-0 text-left pl-3.5 pr-1.5 py-2 text-navy-800"
-                          >
-                            <span className="text-xs text-gold-700 font-medium">หน้า {Math.max(1, h.pageNumber - pageOffset)}</span>
-                            <span className="block text-sm text-navy-700/80 line-clamp-2 mt-0.5">{h.text}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteHighlight(h.id)}
-                            aria-label="ลบไฮไลต์นี้"
-                            className="shrink-0 mt-2 mr-2 p-1 rounded text-navy-700/30 hover:text-red-700 hover:bg-red-50 transition-colors"
-                          >
-                            <IconTrash width={13} height={13} />
-                          </button>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {fileId && drawToolbarOpen && (
-        <div className="flex flex-wrap items-center gap-3 py-2.5 px-3 bg-navy-900/[0.03] border-t border-navy-900/[0.06] text-sm">
-          <div className="flex items-center gap-1 rounded-lg border border-navy-900/15 p-0.5 bg-white">
-            <button
-              type="button"
-              onClick={() => {
-                setDrawTool("pen");
-                setDrawColor((c) => (PEN_COLORS.includes(c) ? c : PEN_COLORS[0]));
-              }}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors ${
-                drawTool === "pen" ? "bg-navy-950 text-ivory" : "text-navy-700 hover:bg-navy-900/5"
-              }`}
-            >
-              <IconPen width={14} height={14} /> ปากกา
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDrawTool("highlighter");
-                setDrawColor((c) => (HIGHLIGHTER_COLORS.includes(c) ? c : HIGHLIGHTER_COLORS[0]));
-              }}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors ${
-                drawTool === "highlighter" ? "bg-navy-950 text-ivory" : "text-navy-700 hover:bg-navy-900/5"
-              }`}
-            >
-              <IconHighlighter width={14} height={14} /> ปากกาเน้น
-            </button>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            {(drawTool === "pen" ? PEN_COLORS : HIGHLIGHTER_COLORS).map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setDrawColor(c)}
-                aria-label={`สี ${c}`}
-                style={{ backgroundColor: c }}
-                className={`w-6 h-6 rounded-full transition-transform ${
-                  drawColor === c ? "ring-2 ring-offset-2 ring-gold-500 scale-105" : "hover:scale-105"
-                }`}
-              />
-            ))}
-          </div>
-
-          <span className="w-px h-5 bg-navy-900/10" aria-hidden />
-
           <button
             type="button"
-            onClick={() => setDrawMode((v) => !v)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${
-              drawMode
+            onClick={toggleFullscreen}
+            title={isFullscreen ? "ออกจากโหมดเต็มจอ" : "ดูแบบเต็มจอ"}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-colors ${
+              isFullscreen
                 ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
                 : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
             }`}
-            title="เปิดไว้เพื่อวาดด้วยนิ้ว/เมาส์ได้ (ปากกาสไตลัสวาดได้เสมอไม่ต้องเปิด)"
           >
-            {drawMode ? "วาดด้วยนิ้วเปิดอยู่" : "วาดด้วยนิ้ว: ปิด"}
+            {isFullscreen ? <IconCollapse width={15} height={15} /> : <IconExpand width={15} height={15} />}
+            <span className="reader-label">{isFullscreen ? "ออกเต็มจอ" : "เต็มจอ"}</span>
           </button>
-
+          {isFullscreen && (
+            <button
+              type="button"
+              onClick={() => setToolbarsHidden(true)}
+              title="ซ่อนแถบเครื่องมือ ให้เหลือแต่หน้าหนังสือ"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
+            >
+              <IconChevronDown width={15} height={15} />
+              <span className="reader-label">ซ่อนเครื่องมือ</span>
+            </button>
+          )}
+          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={zoomOut}
+              disabled={zoomLevel <= MIN_ZOOM}
+              aria-label="ซูมออก"
+              className="w-7 h-7 flex items-center justify-center rounded-lg border border-navy-900/15 text-navy-700 font-semibold hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-30 transition-colors"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              onClick={resetZoom}
+              title="รีเซ็ตเป็น 100%"
+              className="w-12 text-center tabular-nums text-navy-700 hover:text-gold-700 transition-colors"
+            >
+              {Math.round(zoomLevel * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={zoomIn}
+              disabled={zoomLevel >= MAX_ZOOM}
+              aria-label="ซูมเข้า"
+              className="w-7 h-7 flex items-center justify-center rounded-lg border border-navy-900/15 text-navy-700 font-semibold hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-30 transition-colors"
+            >
+              +
+            </button>
+          </div>
+          {fileId && (
+            <>
+              <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+              <button
+                type="button"
+                onClick={() => setDrawToolbarOpen((v) => !v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${
+                  drawToolbarOpen
+                    ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
+                    : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
+                }`}
+              >
+                <IconPen width={14} height={14} />
+                <span className="reader-label">เครื่องมือวาด</span>
+              </button>
+            </>
+          )}
+          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
           <button
             type="button"
-            onClick={undoLastDrawing}
-            disabled={!drawings.some((d) => d.pageNumber === currentPage)}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-30 transition-colors"
+            onClick={() => capturePage(currentPage)}
+            disabled={capturingPage}
+            title="แคปหน้านี้เป็นรูปภาพเพื่อส่งให้คนอื่น"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40 transition-colors"
           >
-            <IconUndo width={14} height={14} /> ย้อนกลับ
+            <IconCamera width={15} height={15} />
+            <span className="reader-label">{capturingPage ? "กำลังแคป..." : "แคปหน้านี้"}</span>
           </button>
+          <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+          <form onSubmit={onJumpSubmit} className="flex items-center gap-1.5">
+            <label htmlFor="pdf-jump-input" className="reader-label text-navy-700/55 text-xs sm:text-sm">
+              ไปหน้า (สารบัญ)
+            </label>
+            <input
+              id="pdf-jump-input"
+              type="number"
+              min={1}
+              value={jumpInput}
+              onChange={(e) => setJumpInput(e.target.value)}
+              className="w-16 px-2 py-1 rounded-lg border border-navy-900/15 tabular-nums focus:outline-none focus:ring-2 focus:ring-gold-400/60 focus:border-gold-500"
+            />
+            <button
+              type="submit"
+              className="px-3 py-1 rounded-lg border border-navy-900/15 font-medium text-navy-800 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
+            >
+              ไป
+            </button>
+          </form>
 
-          <button
-            type="button"
-            onClick={clearPageDrawings}
-            disabled={!drawings.some((d) => d.pageNumber === currentPage)}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-red-700 hover:border-red-400 hover:bg-red-50 disabled:opacity-30 transition-colors"
-          >
-            <IconTrash width={14} height={14} /> ล้างหน้านี้
-          </button>
+          {fileId && (
+            <>
+              <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
+              <button
+                type="button"
+                onClick={onToggleBookmark}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${
+                  isCurrentPageBookmarked
+                    ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
+                    : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
+                }`}
+              >
+                <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
+                <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
+              </button>
+              {bookmarks.length > 0 && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setBookmarksOpen((v) => !v)}
+                    className="inline-flex items-center gap-1 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
+                  >
+                    รายการที่คั่น
+                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-400/20 text-gold-700 text-xs font-semibold">
+                      {bookmarks.length}
+                    </span>
+                    <span className="text-navy-700/40 text-[10px]">{bookmarksOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {bookmarksOpen && (
+                    <div className="absolute bottom-full mb-2 right-0 bg-white border border-navy-900/10 rounded-xl shadow-card-hover py-1.5 min-w-[150px] z-10">
+                      {bookmarks.map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => {
+                            goToPage(p);
+                            setBookmarksOpen(false);
+                          }}
+                          className="w-full text-left px-3.5 py-1.5 hover:bg-gold-400/5 text-navy-800 inline-flex items-center gap-2"
+                        >
+                          <IconBookmark width={12} height={12} className="text-gold-500 shrink-0" fill="currentColor" />
+                          หน้า {Math.max(1, p - pageOffset)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {highlights.length > 0 && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setHighlightsOpen((v) => !v)}
+                    className="inline-flex items-center gap-1 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
+                  >
+                    <IconHighlighter width={14} height={14} />
+                    ไฮไลต์
+                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-400/20 text-gold-700 text-xs font-semibold">
+                      {highlights.length}
+                    </span>
+                    <span className="text-navy-700/40 text-[10px]">{highlightsOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {highlightsOpen && (
+                    <div className="absolute bottom-full mb-2 right-0 bg-white border border-navy-900/10 rounded-xl shadow-card-hover py-1.5 w-64 max-h-72 overflow-y-auto z-10">
+                      {[...highlights]
+                        .sort((a, b) => a.pageNumber - b.pageNumber)
+                        .map((h) => (
+                          <div key={h.id} className="group flex items-start gap-1 hover:bg-gold-400/5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                goToPage(h.pageNumber);
+                                setHighlightsOpen(false);
+                              }}
+                              className="flex-1 min-w-0 text-left pl-3.5 pr-1.5 py-2 text-navy-800"
+                            >
+                              <span className="text-xs text-gold-700 font-medium">หน้า {Math.max(1, h.pageNumber - pageOffset)}</span>
+                              <span className="block text-sm text-navy-700/80 line-clamp-2 mt-0.5">{h.text}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteHighlight(h.id)}
+                              aria-label="ลบไฮไลต์นี้"
+                              className="shrink-0 mt-2 mr-2 p-1 rounded text-navy-700/30 hover:text-red-700 hover:bg-red-50 transition-colors"
+                            >
+                              <IconTrash width={13} height={13} />
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
+
+        {fileId && drawToolbarOpen && (
+          // shrink-0 so a short landscape phone clips the page rather than the
+          // stationery, and reader-toolbar folds this row down to one scrollable
+          // line there, the same way the bar above it already collapses.
+          <div className="reader-toolbar shrink-0 flex flex-wrap items-center gap-3 py-2.5 px-3 bg-navy-900/[0.03] border-t border-navy-900/[0.06] text-sm">
+            <div className="flex items-center gap-1 rounded-lg border border-navy-900/15 p-0.5 bg-white">
+              {DRAW_TOOLS.map(({ id, label, Icon, hint }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => pickDrawTool(id)}
+                  title={hint}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors ${
+                    drawTool === id ? "bg-navy-950 text-ivory" : "text-navy-700 hover:bg-navy-900/5"
+                  }`}
+                >
+                  <Icon width={14} height={14} /> {label}
+                </button>
+              ))}
+            </div>
+
+            {/* The eraser has no colour of its own — a palette beside it would
+                only suggest it erases one colour at a time. */}
+            {drawTool !== "eraser" && (
+              <div className="flex items-center gap-1.5">
+                {paletteFor(drawTool).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setDrawColor(c)}
+                    aria-label={`สี ${c}`}
+                    style={{ backgroundColor: c }}
+                    className={`w-6 h-6 rounded-full transition-transform ${
+                      drawColor === c ? "ring-2 ring-offset-2 ring-gold-500 scale-105" : "hover:scale-105"
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
+
+            <span className="w-px h-5 bg-navy-900/10" aria-hidden />
+
+            <button
+              type="button"
+              onClick={() => setDrawMode((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border transition-colors ${
+                drawMode
+                  ? "border-gold-500/50 text-gold-700 bg-gold-400/10"
+                  : "border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5"
+              }`}
+              title="เปิดไว้เพื่อวาด/ลบด้วยนิ้วหรือเมาส์ได้ (ปากกาสไตลัสใช้ได้เสมอไม่ต้องเปิด)"
+            >
+              {drawMode ? "วาดด้วยนิ้วเปิดอยู่" : "วาดด้วยนิ้ว: ปิด"}
+            </button>
+
+            <button
+              type="button"
+              onClick={undoLastDrawing}
+              disabled={!drawings.some((d) => d.pageNumber === currentPage)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-30 transition-colors"
+            >
+              <IconUndo width={14} height={14} /> ย้อนกลับ
+            </button>
+
+            <button
+              type="button"
+              onClick={clearPageDrawings}
+              disabled={!drawings.some((d) => d.pageNumber === currentPage)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-red-700 hover:border-red-400 hover:bg-red-50 disabled:opacity-30 transition-colors"
+            >
+              <IconTrash width={14} height={14} /> ล้างหน้านี้
+            </button>
+          </div>
+        )}
+
+        </>
+      )}
+
+      {isFullscreen && toolbarsHidden && (
+        <button
+          type="button"
+          onClick={() => setToolbarsHidden(false)}
+          title="แสดงแถบเครื่องมือ"
+          className="absolute right-4 z-20 inline-flex items-center gap-2 rounded-full bg-navy-950/85 text-ivory pl-4 pr-3 py-2 text-sm font-medium shadow-card-hover backdrop-blur-sm"
+          style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}
+        >
+          <span className="tabular-nums">
+            {currentPage}
+            <span className="text-ivory/35 mx-1">/</span>
+            {numPages}
+          </span>
+          <IconChevronUp width={16} height={16} className="text-gold-400" />
+        </button>
       )}
 
       {showRotateHint && (
@@ -991,7 +1109,9 @@ export default function PdfReader({
       )}
     </div>
   );
-}
+});
+
+export default PdfReader;
 
 function PageSlot({
   doc,
@@ -1006,6 +1126,7 @@ function PageSlot({
   drawEnabled,
   drawMode,
   onStrokeComplete,
+  onErase,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -1014,7 +1135,7 @@ function PageSlot({
   onInView: (pageNumber: number) => void;
   highlights: Highlight[];
   drawings: Drawing[];
-  drawTool: Drawing["tool"];
+  drawTool: DrawToolId;
   drawColor: string;
   /** Whether this reader even has somewhere to save a stroke (needs a fileId). */
   drawEnabled: boolean;
@@ -1022,6 +1143,8 @@ function PageSlot({
    *  On: finger and mouse draw too, for phones/tablets without a stylus. */
   drawMode: boolean;
   onStrokeComplete: (pageNumber: number, points: DrawingPoint[]) => void;
+  /** Eraser only. `pageAspect` lets the caller keep the eraser round on a page of any shape. */
+  onErase: (pageNumber: number, point: DrawingPoint, pageAspect: number) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1136,7 +1259,9 @@ function PageSlot({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     for (const d of drawings) paintStroke(ctx, d.points, d.color, d.strokeWidth, d.tool === "highlighter", cssWidth, cssHeight);
-    if (inProgress) paintStroke(ctx, inProgress, drawColor, TOOL_WIDTH[drawTool], drawTool === "highlighter", cssWidth, cssHeight);
+    if (inProgress && drawTool !== "eraser") {
+      paintStroke(ctx, inProgress, drawColor, strokeWidthFor(drawTool), drawTool === "highlighter", cssWidth, cssHeight);
+    }
   }
 
   // Redraws whenever the saved strokes change, or the page resizes/rezooms
@@ -1185,6 +1310,9 @@ function PageSlot({
     e.preventDefault();
     activeStrokeRef.current = [pt];
     activePointerIdRef.current = e.pointerId;
+    // The eraser bites as it is dragged rather than on release, so a tap
+    // straight onto a stroke rubs it out without having to move first.
+    if (drawTool === "eraser") onErase(pageNumber, pt, aspect);
     // Can throw if the browser doesn't consider this pointerId an active
     // session (seen with synthetic events; harmless either way here since
     // capture is just an optimization to keep tracking the pointer off-page).
@@ -1200,7 +1328,15 @@ function PageSlot({
     const pt = pointFromEvent(e);
     if (!pt) return;
     e.preventDefault();
-    activeStrokeRef.current.push(pt);
+    if (drawTool === "eraser") {
+      onErase(pageNumber, pt, aspect);
+      return;
+    }
+    // A ruler keeps only where the stroke started and where the pointer is now,
+    // so what lands on the page is the straight line between the two however the
+    // hand wobbled on the way — and it keeps following the pointer until you lift.
+    if (drawTool === "ruler") activeStrokeRef.current = [activeStrokeRef.current[0], pt];
+    else activeStrokeRef.current.push(pt);
     redrawStrokes(activeStrokeRef.current);
   }
 
@@ -1214,7 +1350,9 @@ function PageSlot({
     } catch {
       // no-op
     }
-    if (points && points.length >= 2) {
+    if (drawTool === "eraser") {
+      redrawStrokes(); // the erasing already happened as the pointer moved
+    } else if (points && points.length >= 2) {
       onStrokeComplete(pageNumber, points);
     } else {
       redrawStrokes(); // a stray tap — wipe its dot back off
