@@ -1,6 +1,6 @@
 import "../env";
 import { createClient } from "@supabase/supabase-js";
-import type { StorageAdapter } from "./types";
+import type { StorageAdapter, StoredObject } from "./types";
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SECRET_KEY) {
   throw new Error("SUPABASE_URL / SUPABASE_SECRET_KEY are not set.");
@@ -33,6 +33,23 @@ export const supabaseStorageAdapter: StorageAdapter = {
   async delete(key) {
     const { error } = await supabase.storage.from(bucket).remove([key]);
     if (error) throw new Error(`STORAGE_DELETE_FAILED: ${error.message}`);
+  },
+
+  async listAll() {
+    const objects: StoredObject[] = [];
+    // Supabase Storage pages by offset rather than by cursor, and reports a
+    // file's size inside its metadata blob rather than as a column.
+    const pageSize = 1000;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase.storage.from(bucket).list("", { limit: pageSize, offset });
+      if (error) throw new Error(`STORAGE_LIST_FAILED: ${error.message}`);
+      if (!data || data.length === 0) break;
+      for (const entry of data) {
+        objects.push({ key: entry.name, bytes: Number((entry.metadata as { size?: number } | null)?.size ?? 0) });
+      }
+      if (data.length < pageSize) break;
+    }
+    return objects;
   },
 
   async createDownloadUrl(key, downloadFilename) {

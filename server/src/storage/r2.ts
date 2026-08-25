@@ -1,7 +1,7 @@
 import "../env";
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import type { StorageAdapter } from "./types";
+import type { StorageAdapter, StoredObject } from "./types";
 
 if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY || !process.env.R2_BUCKET_NAME) {
   throw new Error("R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET_NAME are not set.");
@@ -42,6 +42,21 @@ export const r2StorageAdapter: StorageAdapter = {
 
   async delete(key) {
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  },
+
+  async listAll() {
+    const objects: StoredObject[] = [];
+    // One page holds 1000 keys at most, so this loops until the bucket says
+    // it has no more — a library well past 1000 files still gets a true total.
+    let token: string | undefined;
+    do {
+      const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: token }));
+      for (const object of page.Contents ?? []) {
+        if (object.Key) objects.push({ key: object.Key, bytes: object.Size ?? 0 });
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return objects;
   },
 
   async createDownloadUrl(key, downloadFilename) {
