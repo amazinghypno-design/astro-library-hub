@@ -17,6 +17,7 @@ const ShareView = lazy(() => import("./pages/ShareView"));
 const AdminLogin = lazy(() => import("./pages/admin/AdminLogin"));
 const AdminLibrary = lazy(() => import("./pages/admin/AdminLibrary"));
 const AdminCategories = lazy(() => import("./pages/admin/AdminCategories"));
+const AdminUsage = lazy(() => import("./pages/admin/AdminUsage"));
 
 function RouteFallback() {
   return (
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin/library" element={<AdminLibrary />} />
           <Route path="/admin/categories" element={<AdminCategories />} />
+          <Route path="/admin/usage" element={<AdminUsage />} />
           <Route path="*" element={<div className="py-12 text-center text-navy-700">ไม่พบหน้านี้</div>} />
         </Routes>
       </Suspense>

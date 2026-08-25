@@ -308,3 +308,12 @@ export function IconChevronUp(props: IconProps) {
     </svg>
   );
 }
+
+export function IconChartPie(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5H12V3.5Z" />
+      <path d="M15.5 2.6A8.5 8.5 0 0 1 21.4 8.5H15.5V2.6Z" />
+    </svg>
+  );
+}
