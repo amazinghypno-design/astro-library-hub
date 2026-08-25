@@ -284,12 +284,34 @@ export const adminRouter = router({
       return updated;
     }),
 
+  /**
+   * Deleting a file deletes the file — the bytes in storage, the row, and
+   * everything that hangs off it.
+   *
+   * The bytes go first, and a failure there now stops the whole delete. The
+   * previous order swallowed a storage error and removed the row anyway,
+   * which left the file sitting in the bucket with nothing pointing at it:
+   * invisible to the app, impossible to find through it again, and still paid
+   * for every month. Failing loudly and letting the admin press delete again
+   * is the better half of that trade.
+   *
+   * The row's dependents — bookmarks, highlights, drawings, reading position,
+   * share links — go with it through the database's own ON DELETE CASCADE
+   * (verified against the live schema, not just the Drizzle definition), so
+   * the single statement below really does take the whole record.
+   */
   deleteFile: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ input }) => {
     const [file] = await db.select().from(libraryFiles).where(eq(libraryFiles.id, input.id));
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "FILE_NOT_FOUND" });
 
-    await storageAdapter.delete(file.storageKey).catch(() => {});
-    if (file.previewStorageKey) await storageAdapter.delete(file.previewStorageKey).catch(() => {});
+    try {
+      await storageAdapter.delete(file.storageKey);
+      if (file.previewStorageKey) await storageAdapter.delete(file.previewStorageKey);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "";
+      throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `STORAGE_DELETE_FAILED: ${detail}` });
+    }
+
     await db.delete(libraryFiles).where(eq(libraryFiles.id, input.id));
     return { ok: true };
   }),
