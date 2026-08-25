@@ -37,6 +37,20 @@ export interface Drawing {
   points: DrawingPoint[];
 }
 
+/**
+ * What the drawing toolbar offers. Ruler and eraser are ways of *making* marks
+ * rather than new kinds of mark, so neither adds a value to the saved
+ * `Drawing["tool"]` (or to its `drawing_tool` enum in the database): a ruler
+ * stroke is an ordinary pen stroke that was held straight while it was drawn,
+ * and the eraser saves nothing at all — it deletes strokes it is dragged over.
+ */
+export type DrawToolId = Drawing["tool"] | "ruler" | "eraser";
+
+/** The kind of mark a tool leaves behind — what is actually stored. */
+export function markLeftBy(tool: DrawToolId): Drawing["tool"] {
+  return tool === "highlighter" ? "highlighter" : "pen";
+}
+
 export function getLastPage(fileId: string): number | null {
   const raw = localStorage.getItem(LAST_PAGE_PREFIX + fileId);
   const n = raw ? Number(raw) : NaN;

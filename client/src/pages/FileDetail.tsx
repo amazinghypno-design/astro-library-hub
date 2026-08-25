@@ -1,7 +1,9 @@
+import { useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { IconDownload, IconExpand } from "../components/icons";
-import FilePreviewPane from "../components/FilePreviewPane";
+import FilePreviewPane, { hasOwnReader } from "../components/FilePreviewPane";
+import type { ReaderHandle } from "../lib/useReaderFullscreen";
 import FileActionsMenu from "../components/FileActionsMenu";
 import ShareLinkPanel from "../components/ShareLinkPanel";
 import BookChatPanel from "../components/BookChatPanel";
@@ -19,6 +21,15 @@ export default function FileDetail() {
   // files still fetch their rendered HTML separately — that one is real work
   // on the server, not a link, and only these two formats need it.
   const previewHtmlQuery = trpc.library.previewHtml.useQuery({ id: id! }, { enabled: !!id && needsRenderedHtml });
+
+  // Scroll the reader into view first, so leaving fullscreen later lands the
+  // reader on screen rather than back at the top of the page.
+  const readerRef = useRef<ReaderHandle>(null);
+  const readerBoxRef = useRef<HTMLDivElement>(null);
+  function openFullscreen() {
+    readerBoxRef.current?.scrollIntoView({ block: "start" });
+    readerRef.current?.enterFullscreen();
+  }
 
   if (fileQuery.isLoading) return <div className="text-navy-700/60 py-12 text-center">กำลังโหลด...</div>;
   if (fileQuery.isError) return <div className="text-red-700 py-12 text-center">โหลดข้อมูลไฟล์ไม่สำเร็จ ลองรีเฟรชหน้าอีกครั้ง</div>;
@@ -56,14 +67,24 @@ export default function FileDetail() {
         <a href={file.downloadUrl} className="btn-gold inline-flex items-center gap-2">
           <IconDownload width={18} height={18} /> ดาวน์โหลด
         </a>
-        {file.previewUrl && (
-          <a href={file.previewUrl} target="_blank" rel="noreferrer" className="btn-outline inline-flex items-center gap-2">
-            <IconExpand width={18} height={18} /> เปิดเต็มหน้าต่าง
-          </a>
+        {/* Reading fullscreen goes through our own reader, not the browser's
+            built-in viewer: the toolbar — ปากกา, ไฮไลต์, แคปหน้านี้ — comes with
+            it, which is the whole reason to be in the reader at all. Formats we
+            have no reader for still open in a new tab. */}
+        {hasOwnReader(file.preview) ? (
+          <button type="button" onClick={openFullscreen} className="btn-outline inline-flex items-center gap-2">
+            <IconExpand width={18} height={18} /> อ่านเต็มจอ
+          </button>
+        ) : (
+          file.previewUrl && (
+            <a href={file.previewUrl} target="_blank" rel="noreferrer" className="btn-outline inline-flex items-center gap-2">
+              <IconExpand width={18} height={18} /> เปิดเต็มหน้าต่าง
+            </a>
+          )
         )}
       </div>
 
-      <div className="card overflow-hidden min-h-[400px]">
+      <div ref={readerBoxRef} className="card overflow-hidden min-h-[400px]">
         <FilePreviewPane
           capability={file.preview}
           previewUrl={file.previewUrl ?? undefined}
@@ -74,6 +95,7 @@ export default function FileDetail() {
           fileId={file.id}
           pageOffset={file.pageOffset}
           title={file.title}
+          readerRef={readerRef}
         />
       </div>
 

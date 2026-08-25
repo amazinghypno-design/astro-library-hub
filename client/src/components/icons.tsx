@@ -274,3 +274,37 @@ export function IconFolderOpen(props: IconProps) {
     </svg>
   );
 }
+
+export function IconRuler(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3.2 14.1 14.1 3.2a1.2 1.2 0 0 1 1.7 0l5 5a1.2 1.2 0 0 1 0 1.7L9.9 20.8a1.2 1.2 0 0 1-1.7 0l-5-5a1.2 1.2 0 0 1 0-1.7Z" />
+      <path d="M7.6 9.7 9.7 11.8M10.7 6.6l2.1 2.1M13.8 3.5l2.1 2.1M4.5 12.8l2.1 2.1" />
+    </svg>
+  );
+}
+
+export function IconEraser(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M14.4 4.3 3.9 14.8a1.8 1.8 0 0 0 0 2.5l2.3 2.3a1.8 1.8 0 0 0 1.3.5h4a1.8 1.8 0 0 0 1.3-.5l7.3-7.3a1.8 1.8 0 0 0 0-2.5l-3.2-3.2a1.8 1.8 0 0 0-2.5 0Z" />
+      <path d="M9.2 9.5 15 15.3M8.5 20.1H20" />
+    </svg>
+  );
+}
+
+export function IconChevronDown(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M6 9.5 12 15.5l6-6" />
+    </svg>
+  );
+}
+
+export function IconChevronUp(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M6 14.5 12 8.5l6 6" />
+    </svg>
+  );
+}

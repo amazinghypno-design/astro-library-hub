@@ -1,5 +1,16 @@
+import type { Ref } from "react";
 import OfficePreview from "./OfficePreview";
 import PdfReader from "./PdfReader";
+import type { ReaderHandle } from "../lib/useReaderFullscreen";
+
+/**
+ * Which previews are one of our own readers — the ones with a toolbar, and so
+ * the ones a "อ่านเต็มจอ" button can hand over to instead of opening the raw
+ * file in the browser's built-in viewer.
+ */
+export function hasOwnReader(capability: string) {
+  return capability === "pdf-inline" || capability === "docx-inline" || capability === "xlsx-inline";
+}
 
 /** Shared by FileDetail (`/file/:id`) and ShareView (`/share/:token`) — one preview implementation, not two. */
 export default function FilePreviewPane({
@@ -12,6 +23,7 @@ export default function FilePreviewPane({
   fileId,
   pageOffset,
   title,
+  readerRef,
 }: {
   capability: string;
   previewUrl?: string;
@@ -22,6 +34,8 @@ export default function FilePreviewPane({
   fileId?: string;
   pageOffset?: number;
   title?: string;
+  /** Set for the capabilities `hasOwnReader` accepts; lets the page open the reader's fullscreen. */
+  readerRef?: Ref<ReaderHandle>;
 }) {
   if (capability === "unsupported" || capability === "download-fallback") {
     return (
@@ -38,7 +52,7 @@ export default function FilePreviewPane({
     // browser's native <embed>/<iframe> PDF viewer — that was unreliable in
     // practice (verified: a real 145-page scanned PDF rendered as a plain
     // black box in real desktop Chrome, with no visible error).
-    return <PdfReader url={previewUrl} fileId={fileId} pageOffset={pageOffset} title={title} />;
+    return <PdfReader ref={readerRef} url={previewUrl} fileId={fileId} pageOffset={pageOffset} title={title} />;
   }
   if (capability === "image-inline") {
     if (isError || !previewUrl) return <PreviewError />;
@@ -50,11 +64,11 @@ export default function FilePreviewPane({
   }
   if (capability === "docx-inline") {
     if (isError || !html) return <PreviewError />;
-    return <OfficePreview kind="docx" html={html} fileId={fileId} title={title} />;
+    return <OfficePreview ref={readerRef} kind="docx" html={html} fileId={fileId} title={title} />;
   }
   if (capability === "xlsx-inline") {
     if (isError || !sheets) return <PreviewError />;
-    return <OfficePreview kind="xlsx" sheets={sheets} fileId={fileId} title={title} />;
+    return <OfficePreview ref={readerRef} kind="xlsx" sheets={sheets} fileId={fileId} title={title} />;
   }
   return null;
 }

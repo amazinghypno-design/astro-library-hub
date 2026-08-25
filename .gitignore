@@ -9,3 +9,6 @@ server/storage/
 *.tsbuildinfo
 render_env_vars.txt
 push_to_github.sh
+# Tesseract language packs, downloaded at runtime into OCR_CACHE_PATH. A stray
+# pair lands here if anything ever runs the engine without setting that path.
+*.traineddata
