@@ -42,3 +42,14 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      # OCR reads text off scanned PDFs and image posters. It is the heaviest
+      # work this server does and this is the free plan, so both keys are set
+      # here rather than left to their defaults: flipping OCR_PROVIDER to
+      # "none" turns it off from the dashboard alone, with no redeploy.
+      - key: OCR_PROVIDER
+        value: tesseract
+      # Lower than the 60MB default. OCR holds one page image at a time, but a
+      # file this size on half a CPU is already a quarter-hour of work nobody
+      # is waiting for, and the instance has 512MB to share with the site.
+      - key: OCR_MAX_BYTES
+        value: "41943040"
