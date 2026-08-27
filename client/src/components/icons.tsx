@@ -317,3 +317,46 @@ export function IconChartPie(props: IconProps) {
     </svg>
   );
 }
+
+/** The two ways a collection can be shown — a shelf of covers, or a dense list. See components/FileCollection.tsx. */
+export function IconGridCover(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3.5" y="3.5" width="7" height="8.5" rx="1" />
+      <rect x="13.5" y="3.5" width="7" height="8.5" rx="1" />
+      <rect x="3.5" y="15" width="7" height="5.5" rx="1" />
+      <rect x="13.5" y="15" width="7" height="5.5" rx="1" />
+    </svg>
+  );
+}
+
+export function IconListRows(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 6.5h16M4 12h16M4 17.5h16" />
+    </svg>
+  );
+}
+
+/** Speaking into the search box — see lib/useVoiceSearch.ts. */
+export function IconMic(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" />
+      <path d="M12 18v3" />
+    </svg>
+  );
+}
+
+/** The mic with a stroke through it: recording, press to stop. */
+export function IconMicOff(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" />
+      <path d="M12 18v3" />
+      <path d="M4 4l16 16" />
+    </svg>
+  );
+}

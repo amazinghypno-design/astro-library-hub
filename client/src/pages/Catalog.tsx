@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import FileCard from "../components/FileCard";
+import FileCollection from "../components/FileCollection";
 import { IconCategory, IconDocument, IconEbook, IconPoster, IconSlide, IconSpreadsheet, type IconProps } from "../components/icons";
 
 type FileType = "ebook" | "document" | "spreadsheet" | "slide" | "poster";
@@ -68,11 +68,7 @@ export default function Catalog({ forcedType }: { forcedType?: FileType } = {}) 
           <div className="card text-navy-700/60 py-12 text-center">ยังไม่มีไฟล์ในกลุ่มนี้</div>
         )}
         {query.data && query.data.files.length > 0 && (
-          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {query.data.files.map((file) => (
-              <FileCard key={file.id} file={file} />
-            ))}
-          </div>
+          <FileCollection files={query.data.files} />
         )}
         {query.data && query.data.total > query.data.pageSize && (
           <div className="flex justify-center gap-2 pt-4">
@@ -154,11 +150,7 @@ export default function Catalog({ forcedType }: { forcedType?: FileType } = {}) 
         <div className="card text-navy-700/60 py-12 text-center">ยังไม่มีไฟล์ประเภทนี้ในหมวดนี้</div>
       )}
       {query.data && query.data.files.length > 0 && (
-        <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-          {query.data.files.map((file) => (
-            <FileCard key={file.id} file={file} />
-          ))}
-        </div>
+        <FileCollection files={query.data.files} />
       )}
       {query.data && query.data.total > query.data.pageSize && (
         <div className="flex justify-center gap-2 pt-4">

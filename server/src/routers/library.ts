@@ -41,6 +41,13 @@ const LIST_FILE_COLUMNS = {
   size: libraryFiles.size,
   pageCount: libraryFiles.pageCount,
   createdAt: libraryFiles.createdAt,
+  // Not the cover itself and not a URL to it — the bytes are served by
+  // GET /cover/:id, which the client can build from an id alone. What a list
+  // needs from the database is only "is there one" and "which version", so
+  // that a regenerated cover replaces a cached one (see the route's comment
+  // in server/src/index.ts for why it is cached for a year).
+  hasCover: sql<boolean>`(${libraryFiles.coverStorageKey} is not null)`,
+  coverVersion: libraryFiles.updatedAt,
 };
 
 const DETAIL_FILE_COLUMNS = {

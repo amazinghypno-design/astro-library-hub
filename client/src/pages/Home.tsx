@@ -4,7 +4,9 @@ import { trpc } from "../lib/trpc";
 import { IconDocument, IconEbook, IconPoster, IconSlide, IconSpreadsheet, IconStar, IconUpload, type IconProps } from "../components/icons";
 import CategoryBarChart from "../components/CategoryBarChart";
 import { FileTypeDonutChart } from "../components/CategoryDonutChart";
-import FileCard from "../components/FileCard";
+import FileCollection from "../components/FileCollection";
+import VoiceSearchButton from "../components/VoiceSearchButton";
+import { BOOK_GRID_CLASS } from "../components/FileCard";
 import { setPendingUploadFile } from "../lib/pendingUpload";
 import { useStaleCache, useSlowLoadNotice } from "../lib/staleCache";
 
@@ -48,6 +50,13 @@ export default function Home() {
     navigate(`/search?q=${encodeURIComponent(keyword)}`);
   }
 
+  // A spoken phrase goes straight to the results: the reader has already said
+  // what they want, so making them then press "ค้นหา" undoes the point of it.
+  function onSpoken(text: string) {
+    setKeyword(text);
+    navigate(`/search?q=${encodeURIComponent(text)}`);
+  }
+
   function onUploadButtonDrop(e: React.DragEvent) {
     e.preventDefault();
     setUploadDragOver(false);
@@ -77,14 +86,17 @@ export default function Home() {
             ค้นหา อ่านบนเว็บ และดาวน์โหลดตำราและเอกสารได้ทันที ไม่ต้องรู้ล่วงหน้าว่าอยู่หมวดใด
           </p>
           <form onSubmit={onSearch} className="flex flex-col sm:flex-row gap-3">
-            <input
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              placeholder="ค้นหาชื่อเรื่อง ผู้เขียน หรือคำสำคัญ..."
-              className="flex-1 rounded-xl px-4 py-3.5 text-navy-950 placeholder:text-navy-700/50 focus:outline-none focus:ring-2 focus:ring-gold-400 shadow-lg"
-              aria-label="ค้นหาคลังเอกสาร"
-            />
-            <button type="submit" className="btn-gold text-base py-3.5 px-8">
+            <div className="relative flex-1">
+              <input
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+                placeholder="ค้นหาชื่อเรื่อง ผู้เขียน หรือคำสำคัญ..."
+                className="w-full rounded-xl px-4 py-3.5 pr-14 text-navy-950 placeholder:text-navy-700/50 focus:outline-none focus:ring-2 focus:ring-gold-400 shadow-lg"
+                aria-label="ค้นหาคลังเอกสาร"
+              />
+              <VoiceSearchButton onInterim={setKeyword} onFinal={onSpoken} className="right-2.5" />
+            </div>
+            <button type="submit" className="btn-gold text-base py-3.5 px-8 shrink-0">
               ค้นหา
             </button>
           </form>
@@ -192,11 +204,7 @@ export default function Home() {
         {!recentFiles && !loadFailed && recentFilesQuery.isLoading && <SkeletonCards count={3} />}
         {recentFiles && recentFiles.files.length === 0 && <EmptyNote text="ยังไม่มีรายการในฐานข้อมูล" />}
         {recentFiles && recentFiles.files.length > 0 && (
-          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {recentFiles.files.map((file) => (
-              <FileCard key={file.id} file={file} />
-            ))}
-          </div>
+          <FileCollection files={recentFiles.files} showToggle={false} />
         )}
       </section>
     </div>
@@ -312,9 +320,9 @@ function StaleDataNotice({ onRetry, retrying }: { onRetry: () => void; retrying:
 
 function SkeletonCards({ count }: { count: number }) {
   return (
-    <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
+    <div className={BOOK_GRID_CLASS}>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="card p-4 h-20 animate-pulse bg-navy-900/[0.03]" />
+        <div key={i} className="aspect-[3/4] rounded-lg animate-pulse bg-navy-900/[0.06]" />
       ))}
     </div>
   );

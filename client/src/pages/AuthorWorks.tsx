@@ -1,6 +1,6 @@
 import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import FileCard from "../components/FileCard";
+import FileCollection from "../components/FileCollection";
 
 export default function AuthorWorks() {
   const { name } = useParams<{ name: string }>();
@@ -22,11 +22,7 @@ export default function AuthorWorks() {
       {query.data && query.data.files.length > 0 && (
         <>
           <div className="text-sm text-navy-700/60">พบ {query.data.total} ผลงาน</div>
-          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {query.data.files.map((file) => (
-              <FileCard key={file.id} file={file} />
-            ))}
-          </div>
+          <FileCollection files={query.data.files} />
         </>
       )}
     </div>

@@ -72,6 +72,13 @@ export const libraryFiles = pgTable("library_files", {
   // which always serve storageKey (the untouched original). Null when no
   // rendition was generated (non-PDF files, or compression failed/was skipped).
   previewStorageKey: text("preview_storage_key"),
+  // The book's cover image (WebP), rendered from page 1 of the PDF by the
+  // admin's own browser at upload time — pdf.js is already loaded there for
+  // the reader, so this costs the half-CPU instance nothing. Null when the
+  // file has no cover yet: a non-PDF, or a book uploaded before covers
+  // existed and not yet backfilled. Every view falls back to the type icon,
+  // so a missing cover is a plainer card, never a broken one.
+  coverStorageKey: text("cover_storage_key"),
   tags: jsonb("tags").$type<string[]>().notNull().default([]),
   // Extracted at upload time for PDFs (see server/src/services/pdfMetadata.ts).
   // Nullable: not every file type supports text extraction. Used by the
