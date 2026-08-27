@@ -113,3 +113,14 @@ Checked `~/Desktop` for an existing Astro Library Hub codebase before starting. 
 
 **Why localStorage and not the URL or the account:** it is a habit, not a place — it should not travel in a shared link, and it should survive for a visitor who never logs in. The homepage's "ไฟล์ล่าสุด" row follows the same saved preference but shows no toggle of its own; it is a showcase, not a browser.
 
+## D14 — Voice search uses the browser's own recogniser, not a transcription API
+
+**Decision:** The microphone in the search box (`lib/useVoiceSearch.ts`, `components/VoiceSearchButton.tsx`) is the Web Speech API, running entirely in the reader's browser with `lang = "th-TH"`. No audio is uploaded to our instance, there is no server route, and a spoken phrase runs the search as soon as the recogniser marks it final.
+
+**Why not a transcription API** (Whisper, Google STT, Groq's audio endpoint): a search box is the highest-frequency thing on the site, and every press of the mic would be an upload plus a paid API call for a query that is usually three words long. The free instance has half a CPU and already refuses to compress anything over 25MB for fear of an OOM (see D11) — it has no business receiving audio either. Meanwhile every phone the owner will actually use this on already has a Thai recogniser sitting behind one JavaScript constructor, at no cost and with lower latency than a round trip.
+
+**The trade, stated plainly:** support is uneven and this is not a feature everyone gets. Chrome, Edge and Safari have the API; Firefox does not ship it at all, and browsers only expose the microphone on a secure origin. So the button *renders nothing at all* when `SpeechRecognition` is missing or `isSecureContext` is false, rather than appearing and then failing — a mic that cannot listen is worse than no mic. Typing is untouched everywhere. The second trade is privacy: Chrome's implementation sends the audio to Google's servers to be recognised. That is Chrome's behaviour, not ours, and it is the same path as the phone keyboard's own dictation key — but it is the reason this is a button someone presses and not an always-on mic.
+
+**Interim results are on** so the field fills in as the reader speaks, which is the only feedback that the mic is actually hearing them; `continuous` is off so one press means one phrase and the microphone indicator goes out when they stop talking.
+
+**Verified** on the homepage hero and the `/search` field: an interim transcript filled the field live with the listening state showing, a final transcript navigated to `/search?q=โหราศาสตร์ไทย` on its own, and a `not-allowed` error rendered the Thai "อนุญาตไมโครโฟน" message instead of failing silently.

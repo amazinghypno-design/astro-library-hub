@@ -338,3 +338,25 @@ export function IconListRows(props: IconProps) {
   );
 }
 
+/** Speaking into the search box — see lib/useVoiceSearch.ts. */
+export function IconMic(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" />
+      <path d="M12 18v3" />
+    </svg>
+  );
+}
+
+/** The mic with a stroke through it: recording, press to stop. */
+export function IconMicOff(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" />
+      <path d="M12 18v3" />
+      <path d="M4 4l16 16" />
+    </svg>
+  );
+}
