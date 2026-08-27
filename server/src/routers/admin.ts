@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../db/client";
 import { libraryCategories, libraryFiles, shareLinks } from "../db/schema";
 import { router, adminProcedure } from "./trpc";
@@ -17,6 +17,7 @@ import { storageAdapter } from "../storage/index";
 const loadPdfMetadata = () => import("../services/pdfMetadata");
 import { fromEmbeddedInfo, fromFirstPageText, mergeSuggestions } from "../domain/metadataExtraction";
 import { enqueuePostUploadProcessing } from "../services/postUploadProcessing";
+import { storeCover } from "../services/coverImage";
 import { classifyDocumentType } from "../domain/classifyDocumentType";
 
 const LIMITS = {
@@ -307,6 +308,7 @@ export const adminRouter = router({
     try {
       await storageAdapter.delete(file.storageKey);
       if (file.previewStorageKey) await storageAdapter.delete(file.previewStorageKey);
+      if (file.coverStorageKey) await storageAdapter.delete(file.coverStorageKey);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "";
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: `STORAGE_DELETE_FAILED: ${detail}` });
@@ -314,6 +316,84 @@ export const adminRouter = router({
 
     await db.delete(libraryFiles).where(eq(libraryFiles.id, input.id));
     return { ok: true };
+  }),
+
+  /**
+   * The cover for one file, rendered from page 1 by the admin's browser (see
+   * client/src/lib/renderCover.ts) and posted back here as base64. The image
+   * is small enough — tens of KB — that it goes through tRPC rather than
+   * earning a presigned upload of its own like the document itself does.
+   */
+  saveCover: adminProcedure
+    .input(z.object({ fileId: z.string().uuid(), imageBase64: z.string().min(1) }))
+    .mutation(async ({ input }) => {
+      const [file] = await db
+        .select({ id: libraryFiles.id })
+        .from(libraryFiles)
+        .where(eq(libraryFiles.id, input.fileId));
+      if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "FILE_NOT_FOUND" });
+
+      let key: string;
+      try {
+        key = await storeCover(input.fileId, input.imageBase64);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "";
+        throw new TRPCError({ code: "BAD_REQUEST", message: `COVER_INVALID: ${detail}` });
+      }
+
+      // updatedAt is what the client uses to cache-bust /cover/:id, so a
+      // regenerated cover has to move it — otherwise the browser keeps
+      // showing the year-cached old one.
+      await db
+        .update(libraryFiles)
+        .set({ coverStorageKey: key, updatedAt: new Date() })
+        .where(eq(libraryFiles.id, input.fileId));
+      return { ok: true };
+    }),
+
+  removeCover: adminProcedure.input(z.object({ fileId: z.string().uuid() })).mutation(async ({ input }) => {
+    const [file] = await db
+      .select({ coverStorageKey: libraryFiles.coverStorageKey })
+      .from(libraryFiles)
+      .where(eq(libraryFiles.id, input.fileId));
+    if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "FILE_NOT_FOUND" });
+
+    // The row is cleared even if the object refuses to go: a cover the
+    // database no longer claims is a wasted object, while a row pointing at a
+    // cover that isn't there is a broken picture on every card.
+    await db
+      .update(libraryFiles)
+      .set({ coverStorageKey: null, updatedAt: new Date() })
+      .where(eq(libraryFiles.id, input.fileId));
+    if (file.coverStorageKey) await storageAdapter.delete(file.coverStorageKey).catch(() => {});
+    return { ok: true };
+  }),
+
+  /**
+   * Books uploaded before covers existed. PDFs only — every other type has no
+   * page 1 to photograph, and gets its type icon as before.
+   */
+  filesMissingCover: adminProcedure.query(async () => {
+    return db
+      .select({ id: libraryFiles.id, title: libraryFiles.title })
+      .from(libraryFiles)
+      .where(and(eq(libraryFiles.mimeType, "application/pdf"), isNull(libraryFiles.coverStorageKey)))
+      .orderBy(desc(libraryFiles.createdAt));
+  }),
+
+  /**
+   * A presigned URL straight to storage for the backfill to render from —
+   * deliberately not the /download proxy, which streams the whole file. Going
+   * direct lets pdf.js range-request only the few hundred KB that page 1
+   * needs out of a book that may be fifty megabytes.
+   */
+  coverSourceUrl: adminProcedure.input(z.object({ fileId: z.string().uuid() })).query(async ({ input }) => {
+    const [file] = await db
+      .select({ storageKey: libraryFiles.storageKey, previewStorageKey: libraryFiles.previewStorageKey })
+      .from(libraryFiles)
+      .where(eq(libraryFiles.id, input.fileId));
+    if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "FILE_NOT_FOUND" });
+    return { url: await storageAdapter.createPreviewUrl(file.previewStorageKey ?? file.storageKey) };
   }),
 
   fileDownloadUrl: adminProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ input, ctx }) => {

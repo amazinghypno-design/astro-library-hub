@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { IconSearch } from "../components/icons";
-import FileCard from "../components/FileCard";
+import FileCollection from "../components/FileCollection";
 
 export default function Search() {
   const [params, setParams] = useSearchParams();
@@ -44,11 +44,7 @@ export default function Search() {
         <>
           <div className="text-sm text-navy-700/60">{resultSummary}</div>
           {query.data.files.length === 0 && <div className="card text-navy-700/60 py-12 text-center">ไม่พบรายการที่ตรงกับคำค้นหา</div>}
-          <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {query.data.files.map((file) => (
-              <FileCard key={file.id} file={file} />
-            ))}
-          </div>
+          <FileCollection files={query.data.files} />
           {query.data.total > query.data.pageSize && (
             <div className="flex justify-center gap-2 pt-4">
               <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="btn-outline disabled:opacity-40">

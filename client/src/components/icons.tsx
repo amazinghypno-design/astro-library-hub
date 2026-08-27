@@ -317,3 +317,24 @@ export function IconChartPie(props: IconProps) {
     </svg>
   );
 }
+
+/** The two ways a collection can be shown — a shelf of covers, or a dense list. See components/FileCollection.tsx. */
+export function IconGridCover(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3.5" y="3.5" width="7" height="8.5" rx="1" />
+      <rect x="13.5" y="3.5" width="7" height="8.5" rx="1" />
+      <rect x="3.5" y="15" width="7" height="5.5" rx="1" />
+      <rect x="13.5" y="15" width="7" height="5.5" rx="1" />
+    </svg>
+  );
+}
+
+export function IconListRows(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 6.5h16M4 12h16M4 17.5h16" />
+    </svg>
+  );
+}
+

@@ -157,6 +157,50 @@ app.get("/download/:fileId", async (req, res) => {
   }
 });
 
+/**
+ * Cover images. A shelf view asks for twenty of these at once, so this
+ * deliberately does NOT presign twenty storage URLs per list response —
+ * signing is cheap but twenty extra columns of URL in every payload are not,
+ * and a presigned URL expires, which makes it uncacheable by the browser.
+ * Instead the client builds a stable `/cover/:id?v=<updatedAt>` URL and this
+ * route serves it with a one-year cache: the version changes whenever the
+ * cover is regenerated, so a stale cover is impossible without ever asking
+ * for the same bytes twice.
+ */
+app.get("/cover/:fileId", async (req, res) => {
+  try {
+    const [file] = await db
+      .select({
+        coverStorageKey: libraryFiles.coverStorageKey,
+        status: libraryFiles.status,
+        visibility: libraryFiles.visibility,
+      })
+      .from(libraryFiles)
+      .where(eq(libraryFiles.id, req.params.fileId));
+    if (!file?.coverStorageKey) return res.status(404).json({ error: "COVER_NOT_FOUND" });
+
+    const sessionUser = (req as unknown as { session?: { user?: { role: string } } }).session?.user;
+    if (sessionUser?.role !== "admin" && !isPubliclyVisible(file.status, file.visibility)) {
+      return res.status(404).json({ error: "FILE_NOT_PUBLIC" });
+    }
+
+    const rawUrl = await storageAdapter.createPreviewUrl(file.coverStorageKey);
+    const upstream = await fetch(rawUrl);
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).json({ error: "STORAGE_READ_FAILED" });
+    }
+
+    res.setHeader("Content-Type", "image/webp");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    Readable.fromWeb(upstream.body as never).pipe(res);
+    return undefined;
+  } catch (err) {
+    console.error("[/cover] failed:", err);
+    if (!res.headersSent) res.status(500).json({ error: "COVER_FAILED" });
+    return undefined;
+  }
+});
+
 // Final safety net for any route added later that forgets its own try/catch
 // (Express doesn't call this for async errors unless something explicitly
 // passes them to next(err), but it's cheap insurance and keeps every

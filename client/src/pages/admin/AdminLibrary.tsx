@@ -2,6 +2,8 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import AdminGate from "../../components/AdminGate";
 import { trpc } from "../../lib/trpc";
 import { uploadFileDirect, type PreparedDirectUpload, type UploadProgress, type UploadStage } from "../../lib/upload";
+import { renderCoverFromFile } from "../../lib/renderCover";
+import CoverBackfillPanel from "../../components/CoverBackfillPanel";
 import { IconEdit, IconPlus, IconTrash, IconUpload } from "../../components/icons";
 import { explainAdminError } from "../../lib/explainAdminError";
 import { toThaiErrorMessage } from "../../lib/errorMessages";
@@ -51,6 +53,10 @@ function AdminLibraryInner() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [prepared, setPrepared] = useState<PreparedDirectUpload | null>(null);
+  // Rendered from page 1 the moment the file is chosen, held until the row
+  // exists — a cover needs a file id to belong to, and there is no id until
+  // finalizeUpload returns.
+  const [pendingCover, setPendingCover] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [year, setYear] = useState("");
@@ -86,6 +92,7 @@ function AdminLibraryInner() {
 
   const createUploadUrl = trpc.admin.createUploadUrl.useMutation();
   const inspectFile = trpc.admin.inspectFile.useMutation();
+  const saveCover = trpc.admin.saveCover.useMutation();
 
   // Picks up a file dropped on the Home page's upload button before login
   // redirected here — see lib/pendingUpload.ts.
@@ -191,11 +198,13 @@ function AdminLibraryInner() {
     setAuthorSuggested(false);
     setDocumentType("other");
     setDocumentTypeSuggested(false);
+    setPendingCover(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function handleFileChosen(file: File) {
     setSelectedFile(file);
+    setPendingCover(null);
     setErrorMessage(null);
     setStage(null);
     setUploadProgress(null);
@@ -237,6 +246,12 @@ function AdminLibraryInner() {
         setAuthor(suggestion.author.value);
         setAuthorSuggested(true);
       }
+
+      // From the local File, not from storage: the bytes are already on this
+      // machine, so the cover costs no download and no server CPU at all.
+      // Deliberately last and deliberately unable to throw — a book with no
+      // cover is a plainer card, while a failed upload is lost work.
+      setPendingCover((await renderCoverFromFile(file))?.base64 ?? null);
     } catch (err) {
       setStage("failed");
       setErrorMessage(toThaiErrorMessage(err, "อัปโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"));
@@ -253,10 +268,13 @@ function AdminLibraryInner() {
   async function onSave(e: React.FormEvent) {
     e.preventDefault();
     if (!prepared || !categoryId || !title) return;
+    // Captured before the mutation runs: finalizeUpload's onSuccess resets the
+    // form (clearing pendingCover) and resolves before mutateAsync returns.
+    const coverToSave = pendingCover;
     setErrorMessage(null);
     setStage("finalizing");
     try {
-      await finalizeUpload.mutateAsync({
+      const created = await finalizeUpload.mutateAsync({
         ...prepared,
         categoryId,
         title,
@@ -266,6 +284,15 @@ function AdminLibraryInner() {
         documentType,
         tags: [],
       });
+
+      // After the row is safely written, never before, and never in a way
+      // that can undo it: the file is saved either way, and a missing cover
+      // is repairable from the backfill panel below.
+      if (coverToSave) {
+        await saveCover.mutateAsync({ fileId: created.id, imageBase64: coverToSave }).catch(() => {});
+        await utils.library.files.invalidate();
+        await utils.library.dashboard.invalidate();
+      }
     } catch (err) {
       setStage("failed");
       setErrorMessage(toThaiErrorMessage(err, "บันทึกไฟล์ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง"));
@@ -600,6 +627,8 @@ function AdminLibraryInner() {
           </div>
         )}
       </section>
+
+      <CoverBackfillPanel />
 
       <ConfirmDialog
         open={!!confirmingDeleteId}
