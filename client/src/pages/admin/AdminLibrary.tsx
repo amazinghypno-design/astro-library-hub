@@ -12,16 +12,17 @@ import { takePendingUploadFile } from "../../lib/pendingUpload";
 import { slugify } from "../../lib/slugify";
 
 const STATUS_LABEL: Record<string, string> = { draft: "แบบร่าง", published: "เผยแพร่แล้ว", archived: "เก็บถาวร" };
-type DocumentType = "ebook" | "document" | "spreadsheet" | "slide" | "poster" | "other";
+type DocumentType = "ebook" | "document" | "spreadsheet" | "program" | "slide" | "poster" | "other";
 const DOCUMENT_TYPE_LABEL: Record<DocumentType, string> = {
   ebook: "E-book (PDF แนวตั้ง)",
   document: "เอกสาร (Word/ข้อความ)",
   spreadsheet: "ตารางข้อมูล (Excel/CSV)",
+  program: "โปรแกรม Excel (.xlsm/.xlsb)",
   slide: "สไลด์ (PDF แนวนอน)",
   poster: "โปสเตอร์",
   other: "อื่นๆ",
 };
-const DOCUMENT_TYPE_OPTIONS: DocumentType[] = ["ebook", "document", "spreadsheet", "slide", "poster", "other"];
+const DOCUMENT_TYPE_OPTIONS: DocumentType[] = ["ebook", "document", "spreadsheet", "program", "slide", "poster", "other"];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

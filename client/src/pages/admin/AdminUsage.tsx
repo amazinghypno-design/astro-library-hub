@@ -1,7 +1,7 @@
 import AdminGate from "../../components/AdminGate";
 import { trpc } from "../../lib/trpc";
 import { explainAdminError } from "../../lib/explainAdminError";
-import { IconDocument, IconEbook, IconPoster, IconSlide, IconSpreadsheet, IconFolderOpen } from "../../components/icons";
+import { IconDocument, IconEbook, IconPoster, IconProgram, IconSlide, IconSpreadsheet, IconFolderOpen } from "../../components/icons";
 
 /**
  * How much of the free plan the library has eaten, and where it went.
@@ -32,6 +32,7 @@ const TYPE_LABELS: Record<string, { label: string; Icon: typeof IconEbook }> = {
   ebook: { label: "E-book", Icon: IconEbook },
   document: { label: "เอกสาร", Icon: IconDocument },
   spreadsheet: { label: "ตารางข้อมูล", Icon: IconSpreadsheet },
+  program: { label: "โปรแกรม Excel", Icon: IconProgram },
   slide: { label: "สไลด์", Icon: IconSlide },
   poster: { label: "โปสเตอร์", Icon: IconPoster },
   other: { label: "อื่นๆ", Icon: IconFolderOpen },

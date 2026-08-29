@@ -1,4 +1,6 @@
-export type DocumentType = "ebook" | "document" | "spreadsheet" | "slide" | "poster" | "other";
+import { isExcelProgram, isExcelSheet } from "./excelFormats";
+
+export type DocumentType = "ebook" | "document" | "spreadsheet" | "program" | "slide" | "poster" | "other";
 export type PageOrientation = "portrait" | "landscape";
 
 /**
@@ -13,7 +15,10 @@ export function classifyDocumentType(mimeType: string, originalName: string, pag
   const normalized = mimeType.toLowerCase().trim();
   const extension = originalName.split(".").pop()?.toLowerCase();
 
-  if (normalized.includes("spreadsheet") || normalized === "text/csv" || normalized === "application/vnd.ms-excel" || extension === "xlsx" || extension === "xls") {
+  // Before the plain-spreadsheet test: a .xlsm is also "a spreadsheet" by MIME,
+  // and the more specific answer is the useful one.
+  if (isExcelProgram(normalized, originalName)) return "program";
+  if (isExcelSheet(normalized, originalName) || normalized === "text/csv" || normalized.includes("spreadsheet")) {
     return "spreadsheet";
   }
 

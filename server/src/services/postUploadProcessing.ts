@@ -103,10 +103,10 @@ export async function processUploadedFile(fileId: string, options: PostUploadOpt
   // Word and Excel files carry their text in the file itself; pulling it out
   // here is what lets them be searched and asked questions about, the same as
   // a PDF. Nothing else in this function applies to them.
-  if (hasExtractableText(file.mimeType)) {
+  if (hasExtractableText(file.mimeType, file.originalName)) {
     if (bytes.byteLength > TEXT_EXTRACTION_MAX_BYTES) return;
     try {
-      const text = await extractOfficeText(bytes, file.mimeType);
+      const text = await extractOfficeText(bytes, file.mimeType, file.originalName);
       if (text) await db.update(libraryFiles).set({ extractedText: text }).where(eq(libraryFiles.id, fileId));
     } catch {
       // A corrupt document simply has no text to offer.

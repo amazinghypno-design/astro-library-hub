@@ -24,6 +24,15 @@ export const CHART_HUES = [
 ] as const;
 
 /**
+ * A warm grey for "อื่นๆ", the catch-all bucket. It is not a kind of document,
+ * it is the absence of one, so it does not spend a hue — which is also what
+ * leaves all six for the named types now that "program" is one of them. Not
+ * part of the validated categorical set: it is deliberately the lowest-chroma
+ * thing on the chart, and is never adjacent to itself.
+ */
+const NEUTRAL_HUE = "#8d8578";
+
+/**
  * Document types get a permanent hue each, keyed by type rather than by
  * position, so a type keeps its colour when another type appears, disappears,
  * or overtakes it in the ranking.
@@ -32,9 +41,10 @@ export const FILE_TYPE_HUES: Record<string, string> = {
   ebook: CHART_HUES[0],
   document: CHART_HUES[1],
   spreadsheet: CHART_HUES[2],
+  program: CHART_HUES[5],
   slide: CHART_HUES[3],
   poster: CHART_HUES[4],
-  other: CHART_HUES[5],
+  other: NEUTRAL_HUE,
 };
 
 /** Small stable string hash — same category id always lands on the same hue. */

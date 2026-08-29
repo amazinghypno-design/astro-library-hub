@@ -9,7 +9,7 @@ export interface CollectionFile {
   author: string | null;
   year: number | null;
   mimeType: string;
-  documentType: "ebook" | "document" | "spreadsheet" | "slide" | "poster" | "other";
+  documentType: "ebook" | "document" | "spreadsheet" | "program" | "slide" | "poster" | "other";
   categoryId: string | null;
   size: number;
   pageCount: number | null;

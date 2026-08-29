@@ -37,7 +37,7 @@ function storageKeyFor(originalName: string): string {
 }
 
 const statusEnum = z.enum(["draft", "published", "archived"]);
-const documentTypeEnumValues = z.enum(["ebook", "document", "spreadsheet", "slide", "poster", "other"]);
+const documentTypeEnumValues = z.enum(["ebook", "document", "spreadsheet", "program", "slide", "poster", "other"]);
 
 export const adminRouter = router({
   dashboard: adminProcedure.query(async () => {

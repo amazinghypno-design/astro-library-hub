@@ -43,6 +43,7 @@ export default function App() {
           <Route path="/library" element={<Catalog />} />
           <Route path="/ebooks" element={<Catalog forcedType="ebook" />} />
           <Route path="/documents" element={<Catalog forcedType="document" />} />
+          <Route path="/programs" element={<Catalog forcedType="program" />} />
           <Route path="/subjects" element={<Subjects />} />
           <Route path="/subject/:slug" element={<SubjectHub />} />
           <Route path="/categories" element={<Categories />} />

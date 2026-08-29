@@ -1,3 +1,5 @@
+import { isExcelFile, isReadableWorkbook } from "./excelFormats";
+
 export type PreviewCapability =
   | "pdf-inline"
   | "image-inline"
@@ -52,7 +54,13 @@ export function previewCapability(mimeType: string, originalName: string): Previ
   if (INLINE_IMAGE_MIME.has(normalized)) return "image-inline";
   if (INLINE_TEXT_MIME.has(normalized)) return "text-inline";
   if (DOCX_MIME.has(normalized) || extension === "docx") return "docx-inline";
-  if (SPREADSHEET_INLINE_MIME.has(normalized) || extension === "xlsx" || extension === "xls") return "xlsx-inline";
+  // Macro-enabled and binary workbooks (.xlsm/.xlsb/.xltm) open in SheetJS
+  // exactly like a plain .xlsx does — the macros simply aren't part of what a
+  // sheet renderer shows. So a stored Excel program still gets a real preview
+  // of its sheets; only add-ins (.xlam/.xla), which have no sheets, fall back.
+  if (isReadableWorkbook(normalized, originalName)) return "xlsx-inline";
+  if (SPREADSHEET_INLINE_MIME.has(normalized)) return "xlsx-inline";
+  if (isExcelFile(normalized, originalName)) return "download-fallback";
   if (KNOWN_DOWNLOAD_ONLY_MIME.has(normalized)) return "download-fallback";
 
   if (extension && ["doc", "ppt", "pptx"].includes(extension)) {

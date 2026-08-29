@@ -10,6 +10,7 @@ const TYPE_LABELS: Record<string, string> = {
   ebook: "E-book (PDF/EPUB)",
   document: "เอกสาร (Word/ข้อความ)",
   spreadsheet: "ตารางข้อมูล (Excel/CSV)",
+  program: "โปรแกรม Excel",
   slide: "สไลด์ (PDF แนวนอน)",
   poster: "โปสเตอร์",
   other: "อื่นๆ",

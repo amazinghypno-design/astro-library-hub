@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { IconDocument, IconEbook, IconEdit, IconPoster, IconSlide, IconSpreadsheet, IconStar, IconUpload, type IconProps } from "../components/icons";
+import { IconDocument, IconEbook, IconEdit, IconPoster, IconProgram, IconSlide, IconSpreadsheet, IconStar, IconUpload, type IconProps } from "../components/icons";
 import CategoryBarChart from "../components/CategoryBarChart";
 import { FileTypeDonutChart } from "../components/CategoryDonutChart";
 import FileCollection from "../components/FileCollection";
@@ -12,10 +12,11 @@ import { BOOK_GRID_CLASS } from "../components/FileCard";
 import { setPendingUploadFile } from "../lib/pendingUpload";
 import { useStaleCache, useSlowLoadNotice } from "../lib/staleCache";
 
-const TYPE_CARDS: { key: "ebook" | "document" | "spreadsheet" | "slide" | "poster"; label: string; description: string; Icon: (p: IconProps) => JSX.Element }[] = [
+const TYPE_CARDS: { key: "ebook" | "document" | "spreadsheet" | "program" | "slide" | "poster"; label: string; description: string; Icon: (p: IconProps) => JSX.Element }[] = [
   { key: "ebook", label: "E-book", description: "หนังสือ PDF/EPUB ที่เผยแพร่แล้ว", Icon: IconEbook },
   { key: "document", label: "เอกสาร", description: "เอกสาร Word/ข้อความที่เผยแพร่แล้ว", Icon: IconDocument },
   { key: "spreadsheet", label: "ตารางข้อมูล", description: "ไฟล์ Excel/CSV ที่เผยแพร่แล้ว", Icon: IconSpreadsheet },
+  { key: "program", label: "โปรแกรม Excel", description: "ไฟล์โปรแกรม .xlsm/.xlsb ที่เก็บไว้ใช้งาน", Icon: IconProgram },
   { key: "slide", label: "สไลด์", description: "PDF แนวนอนที่เผยแพร่แล้ว", Icon: IconSlide },
   { key: "poster", label: "โปสเตอร์", description: "โปสเตอร์ที่เผยแพร่แล้ว", Icon: IconPoster },
 ];

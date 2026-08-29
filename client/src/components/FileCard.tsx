@@ -11,7 +11,7 @@ interface FileCardFile {
   author: string | null;
   year: number | null;
   mimeType: string;
-  documentType: "ebook" | "document" | "spreadsheet" | "slide" | "poster" | "other";
+  documentType: "ebook" | "document" | "spreadsheet" | "program" | "slide" | "poster" | "other";
   categoryId: string | null;
   hasCover?: boolean;
   coverVersion?: string | Date | null;

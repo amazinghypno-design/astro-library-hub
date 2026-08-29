@@ -22,10 +22,14 @@ export const fileVisibilityEnum = pgEnum("file_visibility", ["public", "private"
 // application/pdf. Distinguished by page-1 orientation at upload time (see
 // domain/classifyDocumentType.ts), but always admin-editable afterward since
 // orientation detection is a heuristic, not a guarantee.
+// "program" is a macro-enabled Excel workbook (.xlsm/.xlsb/.xltm) — a tool the
+// owner runs, not a table they read. Kept apart from "spreadsheet" because the
+// two are looked for differently; see domain/excelFormats.ts.
 export const documentTypeEnum = pgEnum("document_type", [
   "ebook",
   "document",
   "spreadsheet",
+  "program",
   "slide",
   "poster",
   "other",

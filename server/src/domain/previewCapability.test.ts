@@ -31,6 +31,16 @@ describe("previewCapability", () => {
     expect(previewCapability("application/vnd.ms-excel", "data.xls")).toBe("xlsx-inline");
   });
 
+  it("classifies macro-enabled workbooks as inline too — SheetJS reads their sheets", () => {
+    expect(previewCapability("application/vnd.ms-excel.sheet.macroEnabled.12", "\u0e42\u0e1b\u0e23\u0e41\u0e01\u0e23\u0e21.xlsm")).toBe("xlsx-inline");
+    expect(previewCapability("application/octet-stream", "tool.xlsb")).toBe("xlsx-inline");
+  });
+
+  it("classifies Excel add-ins as download-fallback — they have no sheets to render", () => {
+    expect(previewCapability("application/vnd.ms-excel.addin.macroEnabled.12", "helper.xlam")).toBe("download-fallback");
+    expect(previewCapability("application/octet-stream", "legacy.xla")).toBe("download-fallback");
+  });
+
   it("classifies legacy binary .doc and PowerPoint as download-fallback (no renderer yet)", () => {
     expect(previewCapability("application/msword", "report.doc")).toBe("download-fallback");
     expect(

@@ -86,6 +86,17 @@ export function IconSpreadsheet(props: IconProps) {
   );
 }
 
+/** A workbook with a run button: an Excel file that is a tool, not a table. */
+export function IconProgram(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="4" y="4.5" width="16" height="15" rx="1.5" />
+      <path d="M4 9.5h16" />
+      <path d="m10.2 12.3 4.8 2.7-4.8 2.7z" />
+    </svg>
+  );
+}
+
 export function IconUpload(props: IconProps) {
   return (
     <svg {...base} {...props}>

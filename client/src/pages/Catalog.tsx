@@ -2,15 +2,16 @@ import { useState } from "react";
 import { useSearchParams, useNavigate, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import FileCollection from "../components/FileCollection";
-import { IconCategory, IconDocument, IconEbook, IconPoster, IconSlide, IconSpreadsheet, type IconProps } from "../components/icons";
+import { IconCategory, IconDocument, IconEbook, IconPoster, IconProgram, IconSlide, IconSpreadsheet, type IconProps } from "../components/icons";
 
-type FileType = "ebook" | "document" | "spreadsheet" | "slide" | "poster";
+type FileType = "ebook" | "document" | "spreadsheet" | "program" | "slide" | "poster";
 
 const TYPE_CHIPS: { key: FileType | "all"; label: string; Icon?: (p: IconProps) => JSX.Element }[] = [
   { key: "all", label: "ทั้งหมด" },
   { key: "ebook", label: "E-book", Icon: IconEbook },
   { key: "document", label: "เอกสาร", Icon: IconDocument },
   { key: "spreadsheet", label: "ตารางข้อมูล", Icon: IconSpreadsheet },
+  { key: "program", label: "โปรแกรม Excel", Icon: IconProgram },
   { key: "slide", label: "สไลด์", Icon: IconSlide },
   { key: "poster", label: "โปสเตอร์", Icon: IconPoster },
 ];

@@ -8,6 +8,7 @@ const TYPE_LABEL: Record<CollectionFile["documentType"], string> = {
   ebook: "E-book",
   document: "เอกสาร",
   spreadsheet: "ตารางข้อมูล",
+  program: "โปรแกรม Excel",
   slide: "สไลด์",
   poster: "โปสเตอร์",
   other: "ไฟล์",

@@ -112,10 +112,10 @@ async function viewLinks(file: LinkableFile, req: Request, token?: string) {
  * one extracts the text and stores it, so only that first question waits.
  */
 async function backfillOfficeText(file: typeof libraryFiles.$inferSelect): Promise<string | null> {
-  if (!hasExtractableText(file.mimeType)) return null;
+  if (!hasExtractableText(file.mimeType, file.originalName)) return null;
   try {
     const bytes = await storageAdapter.get(file.storageKey);
-    const text = await extractOfficeText(bytes, file.mimeType);
+    const text = await extractOfficeText(bytes, file.mimeType, file.originalName);
     if (!text) return null;
     await db.update(libraryFiles).set({ extractedText: text }).where(eq(libraryFiles.id, file.id));
     return text;
@@ -147,6 +147,7 @@ export const libraryRouter = router({
         ebook: publishedCount(sql`${libraryFiles.documentType} = 'ebook'`),
         document: publishedCount(sql`${libraryFiles.documentType} = 'document'`),
         spreadsheet: publishedCount(sql`${libraryFiles.documentType} = 'spreadsheet'`),
+        program: publishedCount(sql`${libraryFiles.documentType} = 'program'`),
         slide: publishedCount(sql`${libraryFiles.documentType} = 'slide'`),
         poster: publishedCount(sql`${libraryFiles.documentType} = 'poster'`),
         other: publishedCount(sql`${libraryFiles.documentType} = 'other'`),
@@ -175,6 +176,7 @@ export const libraryRouter = router({
         ebook: totals.ebook,
         document: totals.document,
         spreadsheet: totals.spreadsheet,
+        program: totals.program,
         slide: totals.slide,
         poster: totals.poster,
         other: totals.other,
@@ -207,7 +209,7 @@ export const libraryRouter = router({
         categoryId: z.string().uuid().optional(),
         uncategorized: z.boolean().optional(),
         author: z.string().optional(),
-        type: z.enum(["ebook", "document", "spreadsheet", "slide", "poster"]).optional(),
+        type: z.enum(["ebook", "document", "spreadsheet", "program", "slide", "poster"]).optional(),
         page: z.number().int().min(1).default(1),
         pageSize: z.number().int().min(1).max(50).default(20),
       }),
@@ -260,7 +262,7 @@ export const libraryRouter = router({
     // Office files may not have their text stored yet — the first question
     // asked of one extracts it (backfillOfficeText), so the reader is offered
     // the Q&A panel rather than being told the file does not support it.
-    const canAskAi = file.hasText || hasExtractableText(file.mimeType);
+    const canAskAi = file.hasText || hasExtractableText(file.mimeType, file.originalName);
     return { ...shared, canAskAi, ...(await viewLinks(file, ctx.req)) };
   }),
 
@@ -273,7 +275,7 @@ export const libraryRouter = router({
     return {
       ...shared,
       hasText: !!extractedText && extractedText.length > 0,
-      canAskAi: (!!extractedText && extractedText.length > 0) || hasExtractableText(file.mimeType),
+      canAskAi: (!!extractedText && extractedText.length > 0) || hasExtractableText(file.mimeType, file.originalName),
       ...(await viewLinks(file, ctx.req, input.token)),
     };
   }),

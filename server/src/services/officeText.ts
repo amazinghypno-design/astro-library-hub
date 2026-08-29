@@ -1,14 +1,17 @@
 import type { Buffer } from "node:buffer";
+import { isReadableWorkbook } from "../domain/excelFormats";
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-const XLSX_MIMES = new Set([
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.ms-excel",
-]);
 
-/** Formats whose text can be read straight out of the file, no OCR involved. */
-export function hasExtractableText(mimeType: string): boolean {
-  return mimeType === DOCX_MIME || XLSX_MIMES.has(mimeType);
+/**
+ * Formats whose text can be read straight out of the file, no OCR involved.
+ *
+ * originalName is optional only so older call sites keep compiling: pass it
+ * whenever it is at hand, because a .xlsm arriving as application/octet-stream
+ * (which is what Safari and Firefox report) is recognisable by nothing else.
+ */
+export function hasExtractableText(mimeType: string, originalName = ""): boolean {
+  return mimeType === DOCX_MIME || isReadableWorkbook(mimeType, originalName);
 }
 
 /**
@@ -18,13 +21,13 @@ export function hasExtractableText(mimeType: string): boolean {
  * text was unavailable, but because nobody had asked for it. Both libraries
  * are already dependencies (they render the inline Office preview).
  */
-export async function extractOfficeText(bytes: Buffer, mimeType: string): Promise<string> {
+export async function extractOfficeText(bytes: Buffer, mimeType: string, originalName = ""): Promise<string> {
   if (mimeType === DOCX_MIME) {
     const mammoth = (await import("mammoth")).default;
     const { value } = await mammoth.extractRawText({ buffer: bytes });
     return value.trim();
   }
-  if (XLSX_MIMES.has(mimeType)) {
+  if (isReadableWorkbook(mimeType, originalName)) {
     const XLSX = await import("xlsx");
     const book = XLSX.read(bytes, { type: "buffer" });
     // Sheet name included: in a workbook of tables it is often the only label

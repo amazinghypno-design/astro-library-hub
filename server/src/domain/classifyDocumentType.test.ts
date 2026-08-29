@@ -19,6 +19,18 @@ describe("classifyDocumentType", () => {
     expect(classifyDocumentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "data.xlsx")).toBe("spreadsheet");
   });
 
+  it("classifies a macro-enabled workbook as program, not spreadsheet", () => {
+    expect(classifyDocumentType("application/vnd.ms-excel.sheet.macroEnabled.12", "\u0e04\u0e33\u0e19\u0e27\u0e13\u0e14\u0e27\u0e07.xlsm")).toBe("program");
+    expect(classifyDocumentType("application/vnd.ms-excel.sheet.binary.macroEnabled.12", "tool.xlsb")).toBe("program");
+    expect(classifyDocumentType("application/vnd.ms-excel.template.macroEnabled.12", "form.xltm")).toBe("program");
+  });
+
+  it("recognises an Excel program by extension when the browser sends no MIME type", () => {
+    // Safari and Firefox report nothing for .xlsm, which arrives here as octet-stream.
+    expect(classifyDocumentType("application/octet-stream", "\u0e42\u0e1b\u0e23\u0e41\u0e01\u0e23\u0e21.xlsm")).toBe("program");
+    expect(classifyDocumentType("application/octet-stream", "addin.xlam")).toBe("program");
+  });
+
   it("classifies word-processing documents as document", () => {
     expect(classifyDocumentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx")).toBe(
       "document",

@@ -1,3 +1,5 @@
+import { mimeForUpload } from "./mimeFromName";
+
 export type UploadStage = "hashing" | "uploading" | "finalizing" | "completed" | "failed";
 
 export interface UploadProgress {
@@ -38,7 +40,7 @@ export async function uploadFileDirect(
   onStage: (stage: UploadStage) => void,
   onProgress: (progress: UploadProgress) => void,
 ): Promise<PreparedDirectUpload> {
-  const mimeType = file.type || "application/octet-stream";
+  const mimeType = mimeForUpload(file);
 
   onStage("hashing");
   const buffer = await file.arrayBuffer();
