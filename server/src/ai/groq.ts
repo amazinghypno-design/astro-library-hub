@@ -24,17 +24,17 @@ interface GroqChatResponse {
 }
 
 export const groqAiAdapter: AiAdapter = {
-  async answerFromContext(question, context) {
+  async answerFromContext(question, context, options) {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: MODEL,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: options?.systemPrompt ?? SYSTEM_PROMPT },
           { role: "user", content: `เนื้อหาจากหนังสือ:\n"""\n${context}\n"""\n\nคำถาม: ${question}` },
         ],
-        max_tokens: 600,
+        max_tokens: options?.maxTokens ?? 600,
         temperature: 0.2,
       }),
     });

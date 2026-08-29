@@ -131,3 +131,121 @@ body {
     padding-bottom: 0.35rem;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   The notebook's pages (components/RichTextEditor.tsx).
+
+   Tailwind's preflight deliberately strips headings, lists and quotes back to
+   plain text so components can't inherit surprise styling. That is right for
+   a UI and wrong for a document: the whole point of an editor is that a
+   heading looks like a heading while you type it. These rules give the
+   document back its own typography, scoped to .note-content so nothing else
+   on the site is affected. Applied to the editor and to any read-only render
+   of the same HTML, so a page never changes shape between writing and
+   reading.
+   ───────────────────────────────────────────────────────────────────────── */
+.note-content {
+  @apply text-navy-950 leading-relaxed;
+}
+.note-content:focus {
+  outline: none;
+}
+.note-content > * + * {
+  margin-top: 0.65rem;
+}
+.note-content h1 {
+  @apply font-serif text-3xl font-semibold text-navy-900 mt-6 mb-1;
+}
+.note-content h2 {
+  @apply font-serif text-2xl font-semibold text-navy-900 mt-5 mb-1;
+}
+.note-content h3 {
+  @apply font-serif text-xl font-semibold text-navy-900 mt-4 mb-1;
+}
+.note-content h4 {
+  @apply font-semibold text-base text-navy-900 mt-3;
+}
+.note-content ul,
+.note-content ol {
+  @apply pl-6 space-y-1;
+}
+.note-content ul {
+  list-style: disc;
+}
+.note-content ul ul {
+  list-style: circle;
+}
+.note-content ol {
+  list-style: decimal;
+}
+.note-content li p {
+  margin: 0;
+}
+
+/* Checkboxes: a real <input> the reader can tick, laid beside its text
+   instead of inside the list marker's slot. */
+.note-content ul[data-type="taskList"] {
+  list-style: none;
+  @apply pl-1;
+}
+.note-content ul[data-type="taskList"] li {
+  @apply flex items-start gap-2;
+}
+.note-content ul[data-type="taskList"] li > label {
+  @apply mt-1 shrink-0;
+}
+.note-content ul[data-type="taskList"] input[type="checkbox"] {
+  @apply w-4 h-4 rounded border-navy-900/30 accent-gold-600 cursor-pointer;
+}
+.note-content ul[data-type="taskList"] li[data-checked="true"] > div {
+  @apply line-through text-navy-700/50;
+}
+
+.note-content blockquote {
+  @apply border-l-4 border-gold-500/60 pl-4 py-0.5 text-navy-800 italic;
+}
+.note-content pre {
+  @apply bg-navy-950 text-ivory rounded-xl p-4 overflow-x-auto text-sm font-mono;
+}
+.note-content pre code {
+  @apply bg-transparent text-inherit p-0;
+}
+.note-content code {
+  @apply bg-navy-900/[0.06] text-navy-900 rounded px-1.5 py-0.5 text-[0.9em] font-mono;
+}
+.note-content a {
+  @apply text-gold-600 underline underline-offset-2 hover:text-gold-500;
+}
+.note-content img {
+  @apply max-w-full h-auto rounded-xl my-2;
+}
+.note-content hr {
+  @apply my-6 border-navy-900/15;
+}
+.note-content mark {
+  @apply rounded px-0.5;
+}
+
+.note-content table {
+  @apply w-full my-3 border-collapse overflow-hidden;
+  table-layout: fixed;
+}
+.note-content :is(td, th) {
+  @apply border border-navy-900/15 px-3 py-2 align-top relative;
+}
+.note-content th {
+  @apply bg-navy-900/[0.04] font-semibold text-left;
+}
+/* The cell(s) a table command will act on, while the editor has focus. */
+.note-content .selectedCell {
+  @apply bg-gold-400/20;
+}
+.note-content .column-resize-handle {
+  @apply absolute right-[-2px] top-0 bottom-0 w-1 bg-gold-500 pointer-events-none;
+}
+
+/* An empty page says what to do instead of sitting blank (Placeholder). */
+.note-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  @apply text-navy-700/35 float-left h-0 pointer-events-none;
+}

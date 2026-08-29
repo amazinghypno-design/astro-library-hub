@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Request } from "express";
 import { and, asc, count, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/client";
-import { libraryCategories, libraryFiles, shareLinks } from "../db/schema";
+import { libraryCategories, libraryFiles, shareLinks, subjects } from "../db/schema";
 import { TRPCError } from "@trpc/server";
 import { previewCapability } from "../domain/previewCapability";
 import { isShareLinkValid } from "../domain/shareLink";
@@ -183,15 +183,27 @@ export const libraryRouter = router({
     };
   }),
 
-  categories: publicProcedure.input(z.object({ search: z.string().optional() }).optional()).query(async ({ input }) => {
-    const where = input?.search ? ilike(libraryCategories.name, `%${input.search}%`) : undefined;
-    return db.select().from(libraryCategories).where(where).orderBy(asc(libraryCategories.name));
-  }),
+  categories: publicProcedure
+    .input(z.object({ search: z.string().optional(), subject: z.string().optional() }).optional())
+    .query(async ({ input }) => {
+      const searchFilter = input?.search ? ilike(libraryCategories.name, `%${input.search}%`) : undefined;
+      // By slug, not id: the URL carries the slug, so a page can ask for its
+      // own วิชา without first fetching the subject to learn its id.
+      const subjectFilter = input?.subject
+        ? sql`${libraryCategories.subjectId} = (select id from ${subjects} where slug = ${input.subject})`
+        : undefined;
+      return db
+        .select()
+        .from(libraryCategories)
+        .where(and(searchFilter, subjectFilter))
+        .orderBy(asc(libraryCategories.name));
+    }),
 
   files: publicProcedure
     .input(
       z.object({
         keyword: z.string().optional(),
+        subject: z.string().optional(),
         categoryId: z.string().uuid().optional(),
         uncategorized: z.boolean().optional(),
         author: z.string().optional(),
@@ -216,7 +228,10 @@ export const libraryRouter = router({
       // Exact match (not ilike-partial): avoids conflating "สม" with "สมชาย" on an author works page.
       const authorFilter = input.author ? eq(libraryFiles.author, input.author) : undefined;
       const typeFilter = input.type ? eq(libraryFiles.documentType, input.type) : undefined;
-      const where = and(PUBLIC_FILTER, keywordFilter, categoryFilter, authorFilter, typeFilter);
+      const subjectFilter = input.subject
+        ? sql`${libraryFiles.subjectId} = (select id from ${subjects} where slug = ${input.subject})`
+        : undefined;
+      const where = and(PUBLIC_FILTER, keywordFilter, categoryFilter, authorFilter, typeFilter, subjectFilter);
 
       const [totalRow] = await db.select({ n: count() }).from(libraryFiles).where(where);
       const files = await db

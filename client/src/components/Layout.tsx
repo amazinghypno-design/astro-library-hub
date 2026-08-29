@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import type { ReactNode } from "react";
-import { IconCategory, IconEdit, IconHome, IconLibrary, IconLock, IconSearch } from "./icons";
+import { IconCategory, IconDocument, IconEdit, IconHome, IconLibrary, IconLock, IconSearch } from "./icons";
 import LogoMark from "./LogoMark";
 import { useAdminSession } from "../lib/useAdminSession";
 
@@ -8,7 +8,7 @@ const NAV_LINKS = [
   { to: "/", label: "หน้าแรก", Icon: IconHome },
   { to: "/search", label: "ค้นหา", Icon: IconSearch },
   { to: "/library", label: "คลัง", Icon: IconLibrary },
-  { to: "/categories", label: "หมวดหมู่", Icon: IconCategory },
+  { to: "/subjects", label: "หมวดใหญ่", Icon: IconCategory },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -25,9 +25,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
           <Link to="/" className="flex items-center gap-2 shrink-0 group">
             <LogoMark className="text-gold-400 shrink-0 transition-transform group-hover:scale-110" width={30} height={16} />
-            <span className="font-serif font-semibold text-base sm:text-xl text-ivory tracking-wide">
-              <span className="hidden sm:inline">Astro Library </span>
-              <span className="text-gold-400">Hub</span>
+            <span className="font-serif font-semibold text-base sm:text-xl text-ivory tracking-[0.2em] uppercase">
+              <span className="text-gold-400">Secret</span>
             </span>
           </Link>
           <nav className="flex items-center gap-0.5 sm:gap-2 text-sm">
@@ -51,14 +50,32 @@ export default function Layout({ children }: { children: ReactNode }) {
                 the bar saying which you are, a logged-out session looks exactly
                 like the feature being missing. */}
             {isAdmin ? (
-              <Link
-                to="/admin/library"
-                title="โหมดแอดมิน — แก้ไขไฟล์ได้"
-                className="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-lg whitespace-nowrap font-medium text-gold-400 bg-gold-400/10 border border-gold-400/30 hover:bg-gold-400/20 transition-colors"
-              >
-                <IconEdit width={16} height={16} className="shrink-0" />
-                <span className="hidden sm:inline">โหมดแอดมิน</span>
-              </Link>
+              <>
+                {/* The owner's private notebook. Only ever rendered for a
+                    confirmed session — to everyone else the site has no
+                    notes in it at all. */}
+                <Link
+                  to="/notes"
+                  aria-label="โน้ตของฉัน"
+                  title="โน้ตของฉัน"
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-lg whitespace-nowrap transition-colors font-medium ${
+                    location.pathname === "/notes" || location.pathname === "/skills"
+                      ? "bg-white/10 text-gold-400"
+                      : "text-ivory/75 hover:text-gold-400 hover:bg-white/5"
+                  }`}
+                >
+                  <IconDocument width={18} height={18} className="shrink-0" />
+                  <span className="hidden sm:inline">โน้ต</span>
+                </Link>
+                <Link
+                  to="/admin/library"
+                  title="โหมดแอดมิน — แก้ไขไฟล์ได้"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-2 rounded-lg whitespace-nowrap font-medium text-gold-400 bg-gold-400/10 border border-gold-400/30 hover:bg-gold-400/20 transition-colors"
+                >
+                  <IconEdit width={16} height={16} className="shrink-0" />
+                  <span className="hidden sm:inline">โหมดแอดมิน</span>
+                </Link>
+              </>
             ) : (
               <Link
                 to="/admin/login"
@@ -85,7 +102,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8">{children}</main>
       <footer className="border-t border-navy-900/10 py-8 text-center text-sm text-navy-700/60">
         <span className="text-gold-600/80 mr-1.5">✦</span>
-        Astro Library Hub — คลังความรู้โหราศาสตร์สาธารณะ
+        Secret — คลังวิชาและบันทึกความรู้
       </footer>
     </div>
   );

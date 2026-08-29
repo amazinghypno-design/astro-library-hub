@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { IconCategory, IconChartPie, IconLibrary } from "./icons";
+import { IconCategory, IconChartPie, IconDocument, IconLibrary, IconStar } from "./icons";
 
 /**
  * The admin section's own navigation, here rather than on each page because
@@ -11,8 +11,10 @@ import { IconCategory, IconChartPie, IconLibrary } from "./icons";
  */
 const ADMIN_TABS = [
   { to: "/admin/library", label: "จัดการไฟล์", Icon: IconLibrary },
-  { to: "/admin/categories", label: "หมวดหมู่", Icon: IconCategory },
+  { to: "/admin/subjects", label: "หมวดใหญ่และวิชา", Icon: IconCategory },
   { to: "/admin/usage", label: "การใช้พื้นที่", Icon: IconChartPie },
+  { to: "/notes", label: "โน้ต", Icon: IconDocument },
+  { to: "/skills", label: "สกิล", Icon: IconStar },
 ];
 
 function AdminTabs() {

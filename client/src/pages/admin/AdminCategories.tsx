@@ -9,8 +9,10 @@ import { slugify } from "../../lib/slugify";
 function AdminCategoriesInner() {
   const utils = trpc.useUtils();
   const categories = trpc.library.categories.useQuery();
+  const subjects = trpc.subjects.list.useQuery();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [subjectId, setSubjectId] = useState("");
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
 
   const create = trpc.admin.createCategory.useMutation({
@@ -38,14 +40,17 @@ function AdminCategoriesInner() {
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    create.mutate({ name, slug: slugify(name), description: description || undefined });
+    create.mutate({ name, slug: slugify(name), description: description || undefined, subjectId });
   }
 
   const confirmingCategory = categories.data?.find((c) => c.id === confirmingDeleteId);
 
   return (
     <div className="space-y-8">
-      <h1 className="font-serif text-2xl sm:text-3xl font-semibold text-navy-900">จัดการหมวดหมู่</h1>
+      <div>
+        <h1 className="font-serif text-2xl sm:text-3xl font-semibold text-navy-900">จัดการวิชา</h1>
+        <p className="text-sm text-navy-700/70 mt-1">แต่ละวิชาต้องอยู่ในหมวดใหญ่หมวดใดหมวดหนึ่งเสมอ ไฟล์ที่อัปโหลดจะตามวิชาไปเอง</p>
+      </div>
 
       <form onSubmit={onSubmit} className="card p-5 space-y-4 max-w-md">
         <div>
@@ -53,6 +58,28 @@ function AdminCategoriesInner() {
             ชื่อหมวดหมู่
           </label>
           <input id="cat-name" required value={name} onChange={(e) => setName(e.target.value)} className="input-field" />
+        </div>
+        <div>
+          <label htmlFor="cat-subject" className="label-field">
+            อยู่ในหมวดใหญ่
+          </label>
+          <select
+            id="cat-subject"
+            required
+            value={subjectId}
+            onChange={(e) => setSubjectId(e.target.value)}
+            className="input-field"
+          >
+            <option value="" disabled>
+              เลือกหมวดใหญ่…
+            </option>
+            {subjects.data?.map((subject) => (
+              <option key={subject.id} value={subject.id}>
+                {subject.icon ? `${subject.icon} ` : ""}
+                {subject.name}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label htmlFor="cat-desc" className="label-field">
@@ -63,7 +90,7 @@ function AdminCategoriesInner() {
         {create.error && (
           <div className="text-red-700 text-sm">{explainAdminError(create.error)}</div>
         )}
-        <button type="submit" disabled={create.isLoading || !name.trim()} className="btn-primary">
+        <button type="submit" disabled={create.isLoading || !name.trim() || !subjectId} className="btn-primary">
           {create.isLoading ? "กำลังบันทึก..." : "เพิ่มหมวดหมู่"}
         </button>
       </form>
@@ -77,6 +104,9 @@ function AdminCategoriesInner() {
               <IconCategory width={17} height={17} className="text-gold-600 shrink-0" />
               <span className="font-medium text-navy-900">{cat.name}</span>
               <span className="text-navy-700/50 text-sm">/{cat.slug}</span>
+              <span className="text-xs text-navy-700/50 px-2 py-0.5 rounded-lg bg-navy-900/[0.05]">
+                {subjects.data?.find((s) => s.id === cat.subjectId)?.name ?? "ยังไม่มีหมวดใหญ่"}
+              </span>
               <button
                 type="button"
                 onClick={() => setConfirmingDeleteId(cat.id)}

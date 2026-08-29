@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, count, desc, eq, isNull } from "drizzle-orm";
 import { db } from "../db/client";
-import { libraryCategories, libraryFiles, shareLinks } from "../db/schema";
+import { libraryCategories, libraryFiles, shareLinks, subjects } from "../db/schema";
 import { router, adminProcedure } from "./trpc";
 import { findDuplicate } from "../domain/duplicatePredicate";
 import { checkChecksum, checkRawSize } from "../domain/uploadGuards";
@@ -46,7 +46,17 @@ export const adminRouter = router({
   }),
 
   createCategory: adminProcedure
-    .input(z.object({ name: z.string().min(1), slug: z.string().min(1), description: z.string().optional() }))
+    .input(
+      z.object({
+        name: z.string().min(1),
+        slug: z.string().min(1),
+        description: z.string().optional(),
+        // Which หมวดใหญ่ this วิชา belongs to. Required: a วิชา with no subject
+        // would sit outside every list on the site, which is how knowledge
+        // gets mixed up or lost.
+        subjectId: z.string().uuid(),
+      }),
+    )
     .mutation(async ({ input }) => {
       const existing = await db
         .select()
@@ -55,6 +65,9 @@ export const adminRouter = router({
       if (existing.length > 0) {
         throw new TRPCError({ code: "CONFLICT", message: "CATEGORY_SLUG_EXISTS" });
       }
+      const [subject] = await db.select({ id: subjects.id }).from(subjects).where(eq(subjects.id, input.subjectId));
+      if (!subject) throw new TRPCError({ code: "NOT_FOUND", message: "SUBJECT_NOT_FOUND" });
+
       const [created] = await db.insert(libraryCategories).values(input).returning();
       return created;
     }),
@@ -227,6 +240,11 @@ export const adminRouter = router({
         .insert(libraryFiles)
         .values({
           categoryId: input.categoryId,
+          // Derived from the วิชา rather than asked for again: two answers to
+          // "which body of knowledge is this?" would eventually disagree, and
+          // a file whose subject disagrees with its category is exactly the
+          // mixing the structure exists to prevent.
+          subjectId: category[0].subjectId,
           title: input.title,
           author: input.author,
           year: input.year,

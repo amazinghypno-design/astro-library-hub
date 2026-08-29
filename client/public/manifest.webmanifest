@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Astro Library Hub — คลังความรู้โหราศาสตร์",
-  "short_name": "Astro Hub",
-  "description": "ค้นหา อ่าน และดาวน์โหลดตำรา เอกสาร และข้อมูลโหราศาสตร์ไทย",
+  "name": "Secret — คลังความรู้ส่วนตัว",
+  "short_name": "Secret",
+  "description": "คลังวิชาและบันทึกความรู้ส่วนตัว แยกเป็นหมวดใหญ่ตามศาสตร์",
   "lang": "th",
   "dir": "ltr",
   "start_url": "/",

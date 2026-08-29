@@ -9,7 +9,7 @@ import { eq, sql } from "drizzle-orm";
 import { appRouter } from "./routers/index";
 import { createContext } from "./routers/trpc";
 import { db } from "./db/client";
-import { libraryFiles, shareLinks } from "./db/schema";
+import { libraryFiles, noteFonts, shareLinks } from "./db/schema";
 import { storageAdapter } from "./storage/index";
 import { buildContentDisposition } from "./domain/safeStorageKey";
 import { isPubliclyVisible } from "./domain/publicationPolicy";
@@ -42,7 +42,13 @@ app.use(
 // (A previous mismatch here — Express capped below the app's own upload
 // limit — caused uploads to fail with a raw HTML error page instead of
 // JSON; keeping this small avoids that whole class of bug by construction.)
-app.use(express.json({ limit: "5mb" }));
+// File bytes never come through here (see admin.createUploadUrl), so this
+// limit exists for one thing only: a note. A page of writing is measured in
+// kilobytes, but a note carries its own pasted images inline, and the owner
+// was promised no cap on how much they can write — so the ceiling is set
+// where a single request stops being reasonable for a half-CPU instance
+// rather than where a piece of writing might plausibly end.
+app.use(express.json({ limit: "48mb" }));
 
 // Body-parser errors (e.g. payload too large) otherwise fall through to
 // Express's default HTML error page — return JSON instead so the client's
@@ -201,6 +207,47 @@ app.get("/cover/:fileId", async (req, res) => {
   }
 });
 
+/**
+ * An uploaded font's bytes, for the @font-face rule the notebook builds
+ * (client/src/lib/useNoteFonts.ts).
+ *
+ * No session check, deliberately: a browser fetches a font file as an
+ * anonymous cross-origin request and sends no cookies with it, so a
+ * session-gated route would simply never load a font in production, where
+ * the client and the API sit on different hosts. What is exposed by an
+ * unguessable UUID is a typeface file — not the writing set in it, which
+ * stays behind the notes API. Cached for a year: a font's bytes never change,
+ * a replacement is a new row with a new id.
+ */
+app.get("/font/:fontId", async (req, res) => {
+  try {
+    const [font] = await db
+      .select({ storageKey: noteFonts.storageKey, mimeType: noteFonts.mimeType })
+      .from(noteFonts)
+      .where(eq(noteFonts.id, req.params.fontId));
+    if (!font) return res.status(404).json({ error: "FONT_NOT_FOUND" });
+
+    const rawUrl = await storageAdapter.createPreviewUrl(font.storageKey);
+    const upstream = await fetch(rawUrl);
+    if (!upstream.ok || !upstream.body) {
+      return res.status(502).json({ error: "STORAGE_READ_FAILED" });
+    }
+
+    res.setHeader("Content-Type", font.mimeType);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    // CSS-initiated font requests are cross-origin and credential-less; the
+    // cors() middleware above only answers requests that carry an Origin it
+    // recognises, and a font fetch from a cached stylesheet may not.
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    Readable.fromWeb(upstream.body as never).pipe(res);
+    return undefined;
+  } catch (err) {
+    console.error("[/font] failed:", err);
+    if (!res.headersSent) res.status(500).json({ error: "FONT_FAILED" });
+    return undefined;
+  }
+});
+
 // Final safety net for any route added later that forgets its own try/catch
 // (Express doesn't call this for async errors unless something explicitly
 // passes them to next(err), but it's cheap insurance and keeps every
@@ -225,7 +272,7 @@ process.on("uncaughtException", (err) => {
 
 const port = Number(process.env.PORT ?? 4000);
 app.listen(port, () => {
-  console.log(`Astro Library Hub server listening on http://localhost:${port}`);
+  console.log(`Secret server listening on http://localhost:${port}`);
   // Converting the Office documents takes seconds of CPU that somebody has to
   // spend; better now, while the port has just opened and nobody is waiting on
   // a page, than under the first reader who opens one. Fire-and-forget.

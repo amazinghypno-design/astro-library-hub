@@ -4,6 +4,7 @@ import {
   text,
   integer,
   bigint,
+  boolean,
   timestamp,
   pgEnum,
   jsonb,
@@ -42,8 +43,37 @@ export const users = pgTable("users", {
   emailUnique: uniqueIndex("users_email_unique").on(table.email),
 }));
 
+// The top level of the whole site: a body of knowledge (a ศาสตร์), not a
+// folder. Astrology is one; "สั่งจิตใต้สำนึก" is the second; the owner intends
+// many more, and each is meant to stay its own world — its own books, its own
+// pages, its own skills, never mixed with another's.
+//
+// Everything below hangs off this: library_categories (the individual วิชา
+// inside a subject), library_files, notes and skills all carry a subject, so
+// any list can be narrowed to one body of knowledge without a join through
+// something else. Slug is what the URL uses (/subject/astrology) and is the
+// stable handle an external tool would ask for.
+export const subjects = pgTable("subjects", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  slug: text("slug").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  // An emoji, not an icon component: the set of subjects is the owner's to
+  // grow, and picking a glyph must not require a deploy.
+  icon: text("icon"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  slugUnique: uniqueIndex("subjects_slug_unique").on(table.slug),
+  nameUnique: uniqueIndex("subjects_name_unique").on(table.name),
+}));
+
 export const libraryCategories = pgTable("library_categories", {
   id: uuid("id").defaultRandom().primaryKey(),
+  // Which body of knowledge this วิชา belongs to. Nullable only so the column
+  // could be added to a live table; every row has one.
+  subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "restrict" }),
   name: text("name").notNull(),
   slug: text("slug").notNull(),
   description: text("description"),
@@ -56,6 +86,9 @@ export const libraryCategories = pgTable("library_categories", {
 
 export const libraryFiles = pgTable("library_files", {
   id: uuid("id").defaultRandom().primaryKey(),
+  // Carried on the file itself as well as on its category: a file may have no
+  // category, and every list on the site narrows by subject first.
+  subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "restrict" }),
   categoryId: uuid("category_id").references(() => libraryCategories.id, { onDelete: "restrict" }),
   title: text("title").notNull(),
   author: text("author"),
@@ -100,6 +133,7 @@ export const libraryFiles = pgTable("library_files", {
   publishedAt: timestamp("published_at", { withTimezone: true }),
 }, (table) => ({
   statusVisibilityIdx: index("library_files_status_visibility_idx").on(table.status, table.visibility),
+  subjectIdx: index("library_files_subject_idx").on(table.subjectId),
   categoryIdx: index("library_files_category_idx").on(table.categoryId),
   titleIdx: index("library_files_title_idx").on(table.title),
   checksumIdx: index("library_files_checksum_idx").on(table.checksum),
@@ -125,6 +159,11 @@ export const bookmarks = pgTable("bookmarks", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   fileId: uuid("file_id").notNull().references(() => libraryFiles.id, { onDelete: "cascade" }),
   pageNumber: integer("page_number").notNull(),
+  // What this page is about, in the reader's own words — a bookmark that only
+  // says "page 214" is useless a month later. Empty string, not null, so
+  // bookmarks made before this column existed read as "no note yet" rather
+  // than as a separate third state the UI would have to handle.
+  note: text("note").notNull().default(""),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   userFilePageUnique: uniqueIndex("bookmarks_user_file_page_unique").on(table.userId, table.fileId, table.pageNumber),
@@ -163,6 +202,90 @@ export const drawings = pgTable("drawings", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   userFileIdx: index("drawings_user_file_idx").on(table.userId, table.fileId),
+}));
+
+// A personal writing space, separate from the library's files: the owner's own
+// pages, written in the browser and stored as HTML (see notes router — every
+// save is sanitized server-side before it is ever stored or rendered back).
+//
+// contentText is that same content with the markup stripped, kept as its own
+// column rather than derived on read, because it is what search matches on and
+// what the AI is given as context. Deriving it per request would mean parsing
+// every note's HTML on every question asked.
+export const notes = pgTable("notes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  // Null means the page belongs to no particular subject — a stray thought,
+  // filed later.
+  subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "set null" }),
+  title: text("title").notNull().default(""),
+  // Emoji the owner picks for the page, Notion-style. Null means the list
+  // falls back to a document icon.
+  icon: text("icon"),
+  contentHtml: text("content_html").notNull().default(""),
+  contentText: text("content_text").notNull().default(""),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  isPinned: boolean("is_pinned").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  userUpdatedIdx: index("notes_user_updated_idx").on(table.userId, table.updatedAt),
+  userSubjectIdx: index("notes_user_subject_idx").on(table.userId, table.subjectId),
+  userPinnedIdx: index("notes_user_pinned_idx").on(table.userId, table.isPinned),
+}));
+
+// One row per skill the owner is tracking. The structured part lives here —
+// name, area, level, how long they have practiced — and the long-form part
+// lives in a note (noteId), so a skill's detail page is the same editor with
+// the same tools as any other page, rather than a second, weaker one.
+//
+// level is a plain 1-5 integer, not an enum: the labels ("เริ่มต้น".."เชี่ยวชาญ")
+// are a presentation choice that belongs in the UI, and a number is what both
+// sorting and the AI's context need.
+export const skills = pgTable("skills", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  subjectId: uuid("subject_id").references(() => subjects.id, { onDelete: "set null" }),
+  name: text("name").notNull(),
+  category: text("category"),
+  level: integer("level").notNull().default(1),
+  summary: text("summary"),
+  // Free text ("ตั้งแต่ปี 2560", "3 ปี") rather than a date: the owner rarely
+  // knows the day they started, and an unknown-precision answer is the honest
+  // one to store.
+  experience: text("experience"),
+  noteId: uuid("note_id").references(() => notes.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  userNameUnique: uniqueIndex("skills_user_name_unique").on(table.userId, table.name),
+  userCategoryIdx: index("skills_user_category_idx").on(table.userId, table.category),
+}));
+
+// Fonts the owner uploaded themselves (TTF/OTF/WOFF/WOFF2), used to write
+// notes in a typeface the site does not ship — a Thai display face bought or
+// downloaded elsewhere, the one their printed material already uses.
+//
+// The bytes live in object storage like every other uploaded file (never in a
+// DB column, see ARCHITECTURE.md); this row is the name, the format and the
+// key. `family` is the name the editor shows and the name written into the
+// note's own markup (`font-family: …`), so it has to stay unique per owner —
+// two fonts answering to one name would make an old note change appearance.
+export const noteFonts = pgTable("note_fonts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  family: text("family").notNull(),
+  originalName: text("original_name").notNull(),
+  // "woff2" | "woff" | "truetype" | "opentype" — the CSS format() hint, taken
+  // from the file's extension at upload time. Stored rather than derived so
+  // the @font-face rule can be built from the row alone.
+  format: text("format").notNull(),
+  mimeType: text("mime_type").notNull(),
+  size: bigint("size", { mode: "number" }).notNull(),
+  storageKey: text("storage_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  userFamilyUnique: uniqueIndex("note_fonts_user_family_unique").on(table.userId, table.family),
 }));
 
 export const shareLinks = pgTable("share_links", {

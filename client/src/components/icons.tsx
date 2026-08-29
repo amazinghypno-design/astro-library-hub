@@ -360,3 +360,23 @@ export function IconMicOff(props: IconProps) {
     </svg>
   );
 }
+
+export function IconSave(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M5 4.5h11L19.5 8v11a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19V6A1.5 1.5 0 0 1 6 4.5Z" />
+      <path d="M8 4.5v5h7v-5" />
+      <path d="M8 20.5v-6h8v6" />
+    </svg>
+  );
+}
+
+export function IconFontFile(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 19 10 5h1.6L18 19" />
+      <path d="M6.6 14.2h8.6" />
+      <path d="M20.5 19v-4.2a2.2 2.2 0 0 0-4.2-.9" />
+    </svg>
+  );
+}

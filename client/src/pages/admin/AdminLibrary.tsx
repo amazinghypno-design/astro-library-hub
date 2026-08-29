@@ -49,6 +49,7 @@ const STAGE_LABEL: Partial<Record<UploadStage, string>> = {
 function AdminLibraryInner() {
   const utils = trpc.useUtils();
   const categories = trpc.library.categories.useQuery();
+  const subjects = trpc.subjects.list.useQuery();
   const files = trpc.admin.adminFiles.useQuery();
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -61,6 +62,9 @@ function AdminLibraryInner() {
   const [author, setAuthor] = useState("");
   const [year, setYear] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  // The upload picks a หมวดใหญ่ first and then a วิชา inside it, so a file can
+  // never be filed into another subject's วิชา by accident.
+  const [subjectId, setSubjectId] = useState("");
   const [status, setStatus] = useState<"draft" | "published" | "archived">("draft");
   const [stage, setStage] = useState<UploadStage | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
@@ -75,6 +79,10 @@ function AdminLibraryInner() {
   const [newCategoryName, setNewCategoryName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Only the วิชา that live in the chosen หมวดใหญ่ — the second dropdown can
+  // never offer another subject's.
+  const categoriesInSubject = (categories.data ?? []).filter((c) => c.subjectId === subjectId);
+
   const createCategory = trpc.admin.createCategory.useMutation({
     onSuccess: async (created) => {
       await utils.library.categories.invalidate();
@@ -87,7 +95,7 @@ function AdminLibraryInner() {
 
   function submitNewCategory() {
     if (!newCategoryName.trim()) return;
-    createCategory.mutate({ name: newCategoryName, slug: slugify(newCategoryName) });
+    createCategory.mutate({ name: newCategoryName, slug: slugify(newCategoryName), subjectId });
   }
 
   const createUploadUrl = trpc.admin.createUploadUrl.useMutation();
@@ -426,12 +434,42 @@ function AdminLibraryInner() {
                     onClick={() => setNewCategoryOpen((v) => !v)}
                     className="inline-flex items-center gap-1 text-sm text-gold-600 hover:text-gold-700 font-medium mb-1.5"
                   >
-                    <IconPlus width={14} height={14} /> สร้างหมวดหมู่ใหม่
+                    <IconPlus width={14} height={14} /> สร้างวิชาใหม่
                   </button>
                 </div>
-                <select id="category" required value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input-field">
-                  <option value="" disabled>เลือกหมวดหมู่</option>
-                  {categories.data?.map((c) => (
+                <select
+                  id="subject"
+                  required
+                  value={subjectId}
+                  onChange={(e) => {
+                    setSubjectId(e.target.value);
+                    setCategoryId("");
+                  }}
+                  className="input-field mb-2"
+                  aria-label="หมวดใหญ่"
+                >
+                  <option value="" disabled>
+                    เลือกหมวดใหญ่
+                  </option>
+                  {subjects.data?.map((subject) => (
+                    <option key={subject.id} value={subject.id}>
+                      {subject.icon ? `${subject.icon} ` : ""}
+                      {subject.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  id="category"
+                  required
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                  disabled={!subjectId}
+                  className="input-field disabled:opacity-50"
+                >
+                  <option value="" disabled>
+                    {subjectId ? "เลือกวิชา" : "เลือกหมวดใหญ่ก่อน"}
+                  </option>
+                  {categoriesInSubject.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
@@ -439,7 +477,7 @@ function AdminLibraryInner() {
                   <div className="mt-2 flex gap-2 bg-navy-900/[0.03] rounded-xl p-2.5">
                     <input
                       autoFocus
-                      placeholder="ชื่อหมวดหมู่ใหม่"
+                      placeholder="ชื่อวิชาใหม่"
                       value={newCategoryName}
                       onChange={(e) => setNewCategoryName(e.target.value)}
                       onKeyDown={(e) => {
@@ -504,7 +542,7 @@ function AdminLibraryInner() {
             {!errorMessage && (!prepared || !categoryId || !title) && (
               <div className="text-sm text-navy-700/70 bg-navy-900/[0.04] border border-navy-900/10 rounded-lg px-3 py-2">
                 ยังบันทึกไม่ได้ ต้องมีครบก่อน:{" "}
-                {[!prepared && "รออัปโหลดไฟล์ให้เสร็จ", !title && "ใส่ชื่อเรื่อง", !categoryId && "เลือกหมวดหมู่"]
+                {[!prepared && "รออัปโหลดไฟล์ให้เสร็จ", !title && "ใส่ชื่อเรื่อง", !subjectId && "เลือกหมวดใหญ่", !categoryId && "เลือกวิชา"]
                   .filter(Boolean)
                   .join(" · ")}
               </div>

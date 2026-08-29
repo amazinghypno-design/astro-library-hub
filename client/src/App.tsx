@@ -11,12 +11,18 @@ import Home from "./pages/Home";
 const Search = lazy(() => import("./pages/Search"));
 const Catalog = lazy(() => import("./pages/Catalog"));
 const Categories = lazy(() => import("./pages/Categories"));
+const Subjects = lazy(() => import("./pages/Subjects"));
+const SubjectHub = lazy(() => import("./pages/SubjectHub"));
 const FileDetail = lazy(() => import("./pages/FileDetail"));
 const AuthorWorks = lazy(() => import("./pages/AuthorWorks"));
 const ShareView = lazy(() => import("./pages/ShareView"));
+const Notes = lazy(() => import("./pages/Notes"));
+const Skills = lazy(() => import("./pages/Skills"));
+const EditorPlayground = lazy(() => import("./pages/EditorPlayground"));
 const AdminLogin = lazy(() => import("./pages/admin/AdminLogin"));
 const AdminLibrary = lazy(() => import("./pages/admin/AdminLibrary"));
 const AdminCategories = lazy(() => import("./pages/admin/AdminCategories"));
+const AdminSubjects = lazy(() => import("./pages/admin/AdminSubjects"));
 const AdminUsage = lazy(() => import("./pages/admin/AdminUsage"));
 
 function RouteFallback() {
@@ -37,13 +43,20 @@ export default function App() {
           <Route path="/library" element={<Catalog />} />
           <Route path="/ebooks" element={<Catalog forcedType="ebook" />} />
           <Route path="/documents" element={<Catalog forcedType="document" />} />
+          <Route path="/subjects" element={<Subjects />} />
+          <Route path="/subject/:slug" element={<SubjectHub />} />
           <Route path="/categories" element={<Categories />} />
           <Route path="/file/:id" element={<FileDetail />} />
           <Route path="/author/:name" element={<AuthorWorks />} />
           <Route path="/share/:token" element={<ShareView />} />
+          <Route path="/notes" element={<Notes />} />
+          <Route path="/skills" element={<Skills />} />
+          {/* Dev-only: the editor with sample content, reachable without an account. */}
+          {import.meta.env.DEV && <Route path="/tmp-editor" element={<EditorPlayground />} />}
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin/library" element={<AdminLibrary />} />
           <Route path="/admin/categories" element={<AdminCategories />} />
+          <Route path="/admin/subjects" element={<AdminSubjects />} />
           <Route path="/admin/usage" element={<AdminUsage />} />
           <Route path="*" element={<div className="py-12 text-center text-navy-700">ไม่พบหน้านี้</div>} />
         </Routes>

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { IconDocument, IconEbook, IconPoster, IconSlide, IconSpreadsheet, IconStar, IconUpload, type IconProps } from "../components/icons";
+import { IconDocument, IconEbook, IconEdit, IconPoster, IconSlide, IconSpreadsheet, IconStar, IconUpload, type IconProps } from "../components/icons";
 import CategoryBarChart from "../components/CategoryBarChart";
 import { FileTypeDonutChart } from "../components/CategoryDonutChart";
 import FileCollection from "../components/FileCollection";
+import NotebookHomePanel from "../components/NotebookHomePanel";
+import SubjectCards from "../components/SubjectCards";
 import VoiceSearchButton from "../components/VoiceSearchButton";
 import { BOOK_GRID_CLASS } from "../components/FileCard";
 import { setPendingUploadFile } from "../lib/pendingUpload";
@@ -20,6 +22,7 @@ const TYPE_CARDS: { key: "ebook" | "document" | "spreadsheet" | "slide" | "poste
 
 export default function Home() {
   const navigate = useNavigate();
+  const isOwner = !!trpc.auth.me.useQuery().data;
   const [keyword, setKeyword] = useState("");
   const [uploadDragOver, setUploadDragOver] = useState(false);
   const dashboardQuery = trpc.library.dashboard.useQuery();
@@ -75,15 +78,15 @@ export default function Home() {
         <div aria-hidden className="absolute -top-24 -right-24 w-72 h-72 rounded-full bg-gold-500/10 blur-3xl" />
         <div className="relative max-w-2xl">
           <div className="inline-flex items-center gap-2 text-gold-400/90 text-xs font-medium tracking-[0.2em] uppercase mb-4">
-            <span aria-hidden>✦</span> คลังความรู้โหราศาสตร์
+            <span aria-hidden>✦</span> คลังความรู้ส่วนตัว
           </div>
           <h1 className="font-serif text-3xl sm:text-5xl font-semibold text-ivory mb-4 leading-tight">
-            ตำรา เอกสาร และข้อมูล
+            ทุกวิชาที่สะสมไว้
             <br />
-            <span className="text-gold-400">โหราศาสตร์ไทย</span> ครบในที่เดียว
+            <span className="text-gold-400">อยู่ในที่เดียว</span> ค้นได้ เขียนต่อได้
           </h1>
           <p className="text-ivory/70 mb-8 text-base sm:text-lg max-w-xl">
-            ค้นหา อ่านบนเว็บ และดาวน์โหลดตำราและเอกสารได้ทันที ไม่ต้องรู้ล่วงหน้าว่าอยู่หมวดใด
+            ตำรา บันทึกความรู้ และสกิลของคุณ แยกเป็นหมวดใหญ่ตามศาสตร์ — แต่ละหมวดมีวิชาของตัวเอง ไม่ปนกัน
           </p>
           <form onSubmit={onSearch} className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
@@ -105,7 +108,20 @@ export default function Home() {
               search — the page's actual job — below the fold on a phone. It is
               outlined so the gold search button stays the loudest thing here,
               and it is still the drop target for a dragged file. */}
-          <div className="mt-5 flex justify-center">
+          <div className="mt-5 flex flex-wrap justify-center gap-3">
+            {/* For the owner this is the fastest thing on the page: one tap
+                from the top of the site into a blank page. Everyone else
+                never sees it. */}
+            {isOwner && (
+              <button
+                type="button"
+                onClick={() => navigate("/notes")}
+                className="inline-flex items-center justify-center gap-2.5 rounded-xl bg-gradient-to-b from-gold-400 to-gold-600 text-navy-950 px-6 py-3 text-base font-semibold shadow-sm transition-all hover:shadow-md hover:brightness-105"
+              >
+                <IconEdit width={20} height={20} className="shrink-0" />
+                <span className="whitespace-nowrap">เขียนโน้ต</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => navigate("/admin/library")}
@@ -137,6 +153,16 @@ export default function Home() {
             </button>
           </div>
         </div>
+      </section>
+
+      <NotebookHomePanel />
+
+      {/* The site's own table of contents, before any statistic about it:
+          which body of knowledge you are here for is the first question, and
+          every list below narrows by the answer. */}
+      <section>
+        <SectionHeading title="หมวดใหญ่" />
+        <SubjectCards />
       </section>
 
       <section>

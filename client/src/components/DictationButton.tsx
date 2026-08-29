@@ -1,0 +1,68 @@
+import { useState } from "react";
+import { useVoiceSearch } from "../lib/useVoiceSearch";
+import { IconMic, IconMicOff } from "./icons";
+
+/**
+ * Dictation for the editor: press once, talk, and every phrase the recogniser
+ * settles on is typed in at the caret.
+ *
+ * Same browser recogniser as the search box (lib/useVoiceSearch.ts — no audio
+ * leaves the machine, nothing is transcribed on our server), but held open
+ * across pauses, because dictating a page means stopping to think and a mic
+ * that quits after each sentence would have to be pressed again every time.
+ *
+ * Renders nothing where the API is missing (Firefox) or the origin is not
+ * secure — a mic that cannot listen is worse than no mic, and every one of
+ * these buttons sits next to a keyboard that still works.
+ */
+export default function DictationButton({ onText }: { onText: (text: string) => void }) {
+  const [heard, setHeard] = useState("");
+
+  const voice = useVoiceSearch({
+    continuous: true,
+    onInterim: setHeard,
+    onFinal: (text) => {
+      setHeard("");
+      onText(text);
+    },
+  });
+
+  if (!voice.supported) return null;
+
+  const { listening, error } = voice;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={voice.toggle}
+        title={listening ? "หยุดพิมพ์ตามเสียง" : "พิมพ์ตามเสียง (พูดแล้วข้อความจะขึ้นตรงเคอร์เซอร์)"}
+        aria-label={listening ? "หยุดพิมพ์ตามเสียง" : "พิมพ์ตามเสียง"}
+        aria-pressed={listening}
+        className={`inline-flex items-center justify-center h-8 min-w-[2rem] px-1.5 rounded-lg transition-colors ${
+          listening ? "bg-red-600 text-white" : "text-navy-800 hover:bg-navy-900/[0.07]"
+        }`}
+      >
+        {listening && <span aria-hidden className="absolute inset-0 rounded-lg bg-red-500/30 animate-ping" />}
+        <span className="relative">
+          {listening ? <IconMicOff width={18} height={18} /> : <IconMic width={18} height={18} />}
+        </span>
+      </button>
+
+      {(listening || error) && (
+        <div
+          role="status"
+          className={`absolute top-full left-0 mt-1.5 z-20 max-w-[18rem] rounded-lg px-3 py-1.5 text-sm shadow-card ${
+            error ? "bg-white text-red-700 border border-red-200" : "bg-navy-950 text-ivory"
+          }`}
+        >
+          {/* While the phrase is still being guessed it shows here rather than
+              in the page: half-heard words landing in the document and then
+              being rewritten is unreadable, so only settled text is typed in. */}
+          {error || (heard ? `กำลังฟัง: ${heard}` : "กำลังฟัง… พูดได้เลย")}
+        </div>
+      )}
+    </div>
+  );
+}
