@@ -6,6 +6,7 @@ import { useReaderFullscreen, type ReaderHandle } from "../lib/useReaderFullscre
 import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
 import LandscapeDocumentHint from "./LandscapeDocumentHint";
+import BookmarkMenu from "./BookmarkMenu";
 import { safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
 import {
   addDrawingLocal,
@@ -16,7 +17,9 @@ import {
   removeDrawingLocal,
   markLeftBy,
   saveLastPage,
+  setBookmarkNoteLocal,
   toggleBookmark,
+  type Bookmark,
   type Drawing,
   type DrawingPoint,
   type DrawToolId,
@@ -83,8 +86,11 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
   const [needsWideStage, setNeedsWideStage] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [resumePage, setResumePage] = useState<number | null>(null);
-  const [bookmarks, setBookmarks] = useState<number[]>([]);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  // The bookmark whose description is being written right now — see PdfReader:
+  // the reader is asked what a page is about the moment they mark it.
+  const [editingBookmarkPage, setEditingBookmarkPage] = useState<number | null>(null);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const drawingsRef = useRef<Drawing[]>([]);
   const [drawToolbarOpen, setDrawToolbarOpen] = useState(false);
@@ -224,7 +230,26 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
 
   function onToggleBookmark() {
     if (!fileId) return;
-    setBookmarks(toggleBookmark(fileId, currentPage));
+    const page = currentPage;
+    const wasMarked = bookmarks.some((b) => b.pageNumber === page);
+    setBookmarks(toggleBookmark(fileId, page));
+    if (wasMarked) {
+      setEditingBookmarkPage((p) => (p === page ? null : p));
+    } else {
+      setBookmarksOpen(true);
+      setEditingBookmarkPage(page);
+    }
+  }
+
+  function saveBookmarkNote(page: number, note: string) {
+    if (!fileId) return;
+    setBookmarks(setBookmarkNoteLocal(fileId, page, note));
+  }
+
+  function removeBookmark(page: number) {
+    if (!fileId) return;
+    setBookmarks(toggleBookmark(fileId, page));
+    setEditingBookmarkPage((p) => (p === page ? null : p));
   }
 
   // --- zoom ---------------------------------------------------------------
@@ -461,7 +486,7 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
     focusMatch(marks, next);
   }
 
-  const isCurrentPageBookmarked = useMemo(() => bookmarks.includes(currentPage), [bookmarks, currentPage]);
+  const isCurrentPageBookmarked = useMemo(() => bookmarks.some((b) => b.pageNumber === currentPage), [bookmarks, currentPage]);
   const toolColors = paletteFor(activeTool ?? "pen");
   const toolsVisible = !(isFullscreen && toolbarsHidden);
 
@@ -664,31 +689,17 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
                   <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
                   <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
                 </button>
-                {bookmarks.length > 0 && (
-                  <div className="relative">
-                    <button type="button" onClick={() => setBookmarksOpen((v) => !v)} className="px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5">
-                      ที่คั่นไว้ ({bookmarks.length})
-                    </button>
-                    {bookmarksOpen && (
-                      <div className="absolute right-0 mt-1 z-10 bg-white border border-navy-900/10 rounded-xl shadow-card py-1 min-w-[9rem] max-h-56 overflow-auto">
-                        {bookmarks.map((page) => (
-                          <button
-                            key={page}
-                            type="button"
-                            onClick={() => {
-                              goToPage(page);
-                              setBookmarksOpen(false);
-                            }}
-                            className="w-full text-left px-3 py-1.5 hover:bg-gold-400/10 flex items-center gap-2"
-                          >
-                            <IconBookmark width={12} height={12} className="text-gold-500 shrink-0" fill="currentColor" />
-                            หน้า {page}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+                <BookmarkMenu
+                  bookmarks={bookmarks}
+                  open={bookmarksOpen}
+                  onOpenChange={setBookmarksOpen}
+                  editingPage={editingBookmarkPage}
+                  onEditingPageChange={setEditingBookmarkPage}
+                  onGoToPage={goToPage}
+                  onSaveNote={saveBookmarkNote}
+                  onRemove={removeBookmark}
+                  direction="down"
+                />
               </>
             )}
 

@@ -6,6 +6,21 @@ import { router, authedProcedure } from "./trpc";
 
 const pointSchema = z.object({ x: z.number(), y: z.number() });
 
+interface BookmarkRow {
+  pageNumber: number;
+  note: string;
+}
+
+const sortByPage = (rows: BookmarkRow[]) => [...rows].sort((a, b) => a.pageNumber - b.pageNumber);
+
+async function listBookmarks(userId: string, fileId: string): Promise<BookmarkRow[]> {
+  const rows = await db
+    .select({ pageNumber: bookmarks.pageNumber, note: bookmarks.note })
+    .from(bookmarks)
+    .where(and(eq(bookmarks.userId, userId), eq(bookmarks.fileId, fileId)));
+  return sortByPage(rows);
+}
+
 /**
  * Account-scoped reading progress + bookmarks — the synced-across-devices
  * counterpart to the localStorage version in client/src/lib/readingProgress.ts,
@@ -19,7 +34,7 @@ export const progressRouter = router({
       .from(readingProgress)
       .where(and(eq(readingProgress.userId, ctx.user.id), eq(readingProgress.fileId, input.fileId)));
     const marks = await db
-      .select({ pageNumber: bookmarks.pageNumber })
+      .select({ pageNumber: bookmarks.pageNumber, note: bookmarks.note })
       .from(bookmarks)
       .where(and(eq(bookmarks.userId, ctx.user.id), eq(bookmarks.fileId, input.fileId)));
     const highlightRows = await db
@@ -41,7 +56,7 @@ export const progressRouter = router({
       .orderBy(asc(drawings.createdAt));
     return {
       lastPage: progress?.lastPage ?? null,
-      bookmarks: marks.map((m) => m.pageNumber).sort((a, b) => a - b),
+      bookmarks: sortByPage(marks),
       highlights: highlightRows,
       drawings: drawingRows,
     };
@@ -77,11 +92,30 @@ export const progressRouter = router({
       } else {
         await db.insert(bookmarks).values({ userId: ctx.user.id, fileId: input.fileId, pageNumber: input.page });
       }
-      const marks = await db
-        .select({ pageNumber: bookmarks.pageNumber })
+      return listBookmarks(ctx.user.id, input.fileId);
+    }),
+
+  /**
+   * Writes (or clears) the note on a bookmark. Marking a page and saying what
+   * it is about are one gesture to the reader, so a note on a page that isn't
+   * bookmarked yet creates the bookmark rather than failing — otherwise the
+   * client would have to make two round trips in the right order for what the
+   * reader experienced as one action.
+   */
+  setBookmarkNote: authedProcedure
+    .input(z.object({ fileId: z.string().uuid(), page: z.number().int().positive(), note: z.string().max(500) }))
+    .mutation(async ({ input, ctx }) => {
+      const note = input.note.trim();
+      const [existing] = await db
+        .select({ id: bookmarks.id })
         .from(bookmarks)
-        .where(and(eq(bookmarks.userId, ctx.user.id), eq(bookmarks.fileId, input.fileId)));
-      return marks.map((m) => m.pageNumber).sort((a, b) => a - b);
+        .where(and(eq(bookmarks.userId, ctx.user.id), eq(bookmarks.fileId, input.fileId), eq(bookmarks.pageNumber, input.page)));
+      if (existing) {
+        await db.update(bookmarks).set({ note }).where(eq(bookmarks.id, existing.id));
+      } else {
+        await db.insert(bookmarks).values({ userId: ctx.user.id, fileId: input.fileId, pageNumber: input.page, note });
+      }
+      return listBookmarks(ctx.user.id, input.fileId);
     }),
 
   addHighlight: authedProcedure

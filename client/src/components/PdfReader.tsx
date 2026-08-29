@@ -22,6 +22,7 @@ import { useReaderFullscreen, type ReaderHandle } from "../lib/useReaderFullscre
 import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
 import LandscapeDocumentHint from "./LandscapeDocumentHint";
+import BookmarkMenu from "./BookmarkMenu";
 import {
   addDrawingLocal,
   addHighlightLocal,
@@ -34,7 +35,9 @@ import {
   markLeftBy,
   removeHighlightLocal,
   saveLastPage,
+  setBookmarkNoteLocal,
   toggleBookmark,
+  type Bookmark,
   type Drawing,
   type DrawingPoint,
   type DrawToolId,
@@ -115,8 +118,11 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
   const [errorDetail, setErrorDetail] = useState<string>("");
   const [jumpInput, setJumpInput] = useState("");
   const [resumeBanner, setResumeBanner] = useState<number | null>(null);
-  const [bookmarks, setBookmarks] = useState<number[]>([]);
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  // Which bookmark's description is being written — set the moment a page is
+  // marked, so the reader is asked what it is about while they still remember.
+  const [editingBookmarkPage, setEditingBookmarkPage] = useState<number | null>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [highlightsOpen, setHighlightsOpen] = useState(false);
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
@@ -140,6 +146,7 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
   const progressQuery = trpc.progress.get.useQuery({ fileId: fileId ?? "" }, { enabled: isLoggedIn && !!fileId });
   const saveLastPageMutation = trpc.progress.saveLastPage.useMutation();
   const toggleBookmarkMutation = trpc.progress.toggleBookmark.useMutation();
+  const setBookmarkNoteMutation = trpc.progress.setBookmarkNote.useMutation();
   const addHighlightMutation = trpc.progress.addHighlight.useMutation();
   const removeHighlightMutation = trpc.progress.removeHighlight.useMutation();
   const addDrawingMutation = trpc.progress.addDrawing.useMutation();
@@ -431,11 +438,41 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
 
   function onToggleBookmark() {
     if (!fileId) return;
+    const page = currentPage;
+    const wasMarked = bookmarks.some((b) => b.pageNumber === page);
     if (isLoggedIn) {
-      toggleBookmarkMutation.mutate({ fileId, page: currentPage }, { onSuccess: (result) => setBookmarks(result) });
+      toggleBookmarkMutation.mutate({ fileId, page }, { onSuccess: (result) => setBookmarks(result) });
     } else {
-      setBookmarks(toggleBookmark(fileId, currentPage));
+      setBookmarks(toggleBookmark(fileId, page));
     }
+    // Marking a page and saying what it is about are one gesture: the list
+    // opens on the new bookmark with its note field ready. Un-marking closes
+    // whatever was open instead.
+    if (wasMarked) {
+      setEditingBookmarkPage((p) => (p === page ? null : p));
+    } else {
+      setBookmarksOpen(true);
+      setEditingBookmarkPage(page);
+    }
+  }
+
+  function saveBookmarkNote(page: number, note: string) {
+    if (!fileId) return;
+    if (isLoggedIn) {
+      setBookmarkNoteMutation.mutate({ fileId, page, note }, { onSuccess: (result) => setBookmarks(result) });
+    } else {
+      setBookmarks(setBookmarkNoteLocal(fileId, page, note));
+    }
+  }
+
+  function removeBookmark(page: number) {
+    if (!fileId) return;
+    if (isLoggedIn) {
+      toggleBookmarkMutation.mutate({ fileId, page }, { onSuccess: (result) => setBookmarks(result) });
+    } else {
+      setBookmarks(toggleBookmark(fileId, page));
+    }
+    setEditingBookmarkPage((p) => (p === page ? null : p));
   }
 
   function saveHighlight(pageNumber: number, text: string, rects: Highlight["rects"]) {
@@ -644,7 +681,7 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
     drawingsRef.current = drawings;
   }, [drawings]);
 
-  const isCurrentPageBookmarked = bookmarks.includes(currentPage);
+  const isCurrentPageBookmarked = bookmarks.some((b) => b.pageNumber === currentPage);
   const toolsVisible = !(isFullscreen && toolbarsHidden);
 
   // Each tool remembers a sensible colour: switching to the highlighter should
@@ -927,39 +964,17 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
                 <IconBookmark width={15} height={15} fill={isCurrentPageBookmarked ? "currentColor" : "none"} />
                 <span className="reader-label">{isCurrentPageBookmarked ? "คั่นหน้านี้แล้ว" : "คั่นหน้านี้"}</span>
               </button>
-              {bookmarks.length > 0 && (
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setBookmarksOpen((v) => !v)}
-                    className="inline-flex items-center gap-1 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 transition-colors"
-                  >
-                    รายการที่คั่น
-                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gold-400/20 text-gold-700 text-xs font-semibold">
-                      {bookmarks.length}
-                    </span>
-                    <span className="text-navy-700/40 text-[10px]">{bookmarksOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {bookmarksOpen && (
-                    <div className="absolute bottom-full mb-2 right-0 bg-white border border-navy-900/10 rounded-xl shadow-card-hover py-1.5 min-w-[150px] z-10">
-                      {bookmarks.map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => {
-                            goToPage(p);
-                            setBookmarksOpen(false);
-                          }}
-                          className="w-full text-left px-3.5 py-1.5 hover:bg-gold-400/5 text-navy-800 inline-flex items-center gap-2"
-                        >
-                          <IconBookmark width={12} height={12} className="text-gold-500 shrink-0" fill="currentColor" />
-                          หน้า {Math.max(1, p - pageOffset)}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+              <BookmarkMenu
+                bookmarks={bookmarks}
+                pageOffset={pageOffset}
+                open={bookmarksOpen}
+                onOpenChange={setBookmarksOpen}
+                editingPage={editingBookmarkPage}
+                onEditingPageChange={setEditingBookmarkPage}
+                onGoToPage={goToPage}
+                onSaveNote={saveBookmarkNote}
+                onRemove={removeBookmark}
+              />
               {highlights.length > 0 && (
                 <div className="relative">
                   <button

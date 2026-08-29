@@ -16,6 +16,16 @@ export interface HighlightRect {
   h: number;
 }
 
+/**
+ * A marked page plus what the reader said it was about. `note` is "" when they
+ * haven't written one — the same shape the server stores (see progress
+ * router), so both paths hand the reader components identical objects.
+ */
+export interface Bookmark {
+  pageNumber: number;
+  note: string;
+}
+
 export interface Highlight {
   id: string;
   pageNumber: number;
@@ -61,21 +71,55 @@ export function saveLastPage(fileId: string, page: number): void {
   localStorage.setItem(LAST_PAGE_PREFIX + fileId, String(page));
 }
 
-export function getBookmarks(fileId: string): number[] {
+export function getBookmarks(fileId: string): Bookmark[] {
   try {
     const raw = localStorage.getItem(BOOKMARKS_PREFIX + fileId);
     const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? arr.filter((n) => typeof n === "number").sort((a, b) => a - b) : [];
+    if (!Array.isArray(arr)) return [];
+    // Bookmarks saved before notes existed are bare page numbers. They are
+    // read as notes-less bookmarks rather than discarded, and rewritten in the
+    // new shape the next time this file's bookmarks are saved.
+    return sortBookmarks(
+      arr.flatMap((entry): Bookmark[] => {
+        if (typeof entry === "number") return [{ pageNumber: entry, note: "" }];
+        if (entry && typeof entry.pageNumber === "number") {
+          return [{ pageNumber: entry.pageNumber, note: typeof entry.note === "string" ? entry.note : "" }];
+        }
+        return [];
+      }),
+    );
   } catch {
     return [];
   }
 }
 
-export function toggleBookmark(fileId: string, page: number): number[] {
-  const current = getBookmarks(fileId);
-  const next = current.includes(page) ? current.filter((p) => p !== page) : [...current, page].sort((a, b) => a - b);
+function sortBookmarks(list: Bookmark[]): Bookmark[] {
+  return [...list].sort((a, b) => a.pageNumber - b.pageNumber);
+}
+
+function saveBookmarks(fileId: string, list: Bookmark[]): Bookmark[] {
+  const next = sortBookmarks(list);
   localStorage.setItem(BOOKMARKS_PREFIX + fileId, JSON.stringify(next));
   return next;
+}
+
+export function toggleBookmark(fileId: string, page: number): Bookmark[] {
+  const current = getBookmarks(fileId);
+  const marked = current.some((b) => b.pageNumber === page);
+  return saveBookmarks(fileId, marked ? current.filter((b) => b.pageNumber !== page) : [...current, { pageNumber: page, note: "" }]);
+}
+
+/** Mirrors the server's setBookmarkNote: writing a note marks the page too. */
+export function setBookmarkNoteLocal(fileId: string, page: number, note: string): Bookmark[] {
+  const trimmed = note.trim();
+  const current = getBookmarks(fileId);
+  const exists = current.some((b) => b.pageNumber === page);
+  return saveBookmarks(
+    fileId,
+    exists
+      ? current.map((b) => (b.pageNumber === page ? { ...b, note: trimmed } : b))
+      : [...current, { pageNumber: page, note: trimmed }],
+  );
 }
 
 export function getHighlights(fileId: string): Highlight[] {
