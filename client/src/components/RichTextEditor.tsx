@@ -10,6 +10,8 @@ import TextAlign from "@tiptap/extension-text-align";
 import { CharacterCount, Placeholder } from "@tiptap/extensions";
 import { IconChevronDown, IconEraser, IconHighlighter, IconTrash, IconUndo } from "./icons";
 import DictationButton from "./DictationButton";
+import ProofreadButton from "./ProofreadButton";
+import { ProofreadHighlight } from "../lib/proofread";
 import {
   IconAlignCenter,
   IconAlignJustify,
@@ -17,6 +19,8 @@ import {
   IconAlignRight,
   IconBold,
   IconCode,
+  IconChevronsDown,
+  IconChevronsUp,
   IconCodeBlock,
   IconFont,
   IconHorizontalRule,
@@ -133,19 +137,35 @@ async function fileToInlineImage(file: File): Promise<string> {
 }
 
 /**
+ * Where a space belongs between the phrase just spoken and the text already
+ * in the document.
+ *
+ * Thai does not put spaces between words, so the recogniser settling a phrase
+ * is not a reason to add one: talking without stopping has to come out as one
+ * unbroken run of Thai. A space is added for exactly two reasons — the reader
+ * paused long enough to mean one (`pause`, decided in lib/useVoiceSearch.ts),
+ * or one of the two sides is not Thai, because Latin words spoken into a Thai
+ * note still need separating from what is around them.
+ */
+const THAI_LETTER = /[\u0E00-\u0E7F]/;
+
+function spokenSeparator(precedingChar: string, text: string, pause: boolean): string {
+  if (!precedingChar) return ""; // start of a paragraph
+  if (/\s/.test(precedingChar)) return ""; // there is already a space there
+  if (pause) return " ";
+  const first = text[0] ?? "";
+  return THAI_LETTER.test(precedingChar) && THAI_LETTER.test(first) ? "" : " ";
+}
+
+/**
  * Drops a dictated phrase in at the caret as plain text — never as HTML, so
  * nothing spoken can turn into markup.
- *
- * The leading space is decided rather than always added: Thai runs words
- * together, so a space belongs between one spoken phrase and the last one,
- * and nowhere else. Starting a fresh paragraph, or picking up right after a
- * space, adds none.
  */
-function insertSpokenText(editor: Editor, text: string) {
+function insertSpokenText(editor: Editor, text: string, pause: boolean) {
   const { $from } = editor.state.selection;
   const precedingChar =
     $from.parentOffset > 0 ? $from.parent.textBetween($from.parentOffset - 1, $from.parentOffset) : "";
-  const separator = precedingChar && !/\s/.test(precedingChar) ? " " : "";
+  const separator = spokenSeparator(precedingChar, text, pause);
   editor
     .chain()
     .focus()
@@ -270,10 +290,37 @@ function blockLabel(editor: Editor): string {
   return "ข้อความปกติ";
 }
 
+/**
+ * Whether the toolbar starts folded away, remembered per browser.
+ *
+ * Somebody reading back a long page wants the page and nothing else, and that
+ * preference outlives the visit — re-folding the toolbar on every note would
+ * make the button useless to the person who wanted it most. Wrapped because
+ * storage throws outright in a private window rather than returning nothing.
+ */
+const TOOLBAR_HIDDEN_KEY = "note-toolbar-hidden";
+
+function readToolbarHidden(): boolean {
+  try {
+    return localStorage.getItem(TOOLBAR_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function Toolbar({ editor, fontFamilies, onManageFonts }: { editor: Editor; fontFamilies: string[]; onManageFonts?: () => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const [linkValue, setLinkValue] = useState("");
+  const [hidden, setHidden] = useState(readToolbarHidden);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TOOLBAR_HIDDEN_KEY, hidden ? "1" : "0");
+    } catch {
+      // A browser that refuses storage still gets the toggle, just not the memory.
+    }
+  }, [hidden]);
 
   async function onPickImage(file: File | undefined) {
     if (!file) return;
@@ -287,6 +334,17 @@ function Toolbar({ editor, fontFamilies, onManageFonts }: { editor: Editor; font
   }
 
   const inTable = editor.isActive("table");
+
+  // Folded away: one small button and an otherwise clear page.
+  if (hidden) {
+    return (
+      <div className="sticky top-[3.75rem] z-10 -mx-1 px-1 py-1 bg-ivory/95 backdrop-blur border-b border-navy-900/[0.06] flex justify-end">
+        <ToolButton title="แสดงแถบเครื่องมือ" onClick={() => setHidden(false)}>
+          <IconChevronsDown width={18} height={18} />
+        </ToolButton>
+      </div>
+    );
+  }
 
   return (
     <div className="sticky top-[3.75rem] z-10 -mx-1 px-1 py-1.5 bg-ivory/95 backdrop-blur border-b border-navy-900/10">
@@ -302,7 +360,11 @@ function Toolbar({ editor, fontFamilies, onManageFonts }: { editor: Editor; font
             marks: it is a way of putting words in, not a way of styling them.
             Every settled phrase is inserted as plain text at the caret — never
             as HTML, so nothing spoken can become markup. */}
-        <DictationButton onText={(text) => insertSpokenText(editor, text)} />
+        <DictationButton onText={(text, pause) => insertSpokenText(editor, text, pause)} />
+
+        {/* Proofreading belongs here for the same reason: it is about the
+            words, not their appearance. */}
+        <ProofreadButton editor={editor} />
 
         <Divider />
 
@@ -670,6 +732,14 @@ function Toolbar({ editor, fontFamilies, onManageFonts }: { editor: Editor; font
             </div>
           )}
         </Popover>
+
+        {/* Last, and pushed to the far end of the last row: the way out of the
+            toolbar for somebody who wants to read their page, not edit it. */}
+        <span className="ml-auto">
+          <ToolButton title="ซ่อนแถบเครื่องมือทั้งหมด" onClick={() => setHidden(true)}>
+            <IconChevronsUp width={18} height={18} />
+          </ToolButton>
+        </span>
       </div>
       {imageError && <p className="text-red-700 text-xs px-1 pt-1">{imageError}</p>}
     </div>
@@ -705,6 +775,7 @@ export default function RichTextEditor({
       TableKit.configure({ table: { resizable: true } }),
       Placeholder.configure({ placeholder }),
       CharacterCount,
+      ProofreadHighlight,
     ],
     content: value,
     // Only when the document itself changed. Tiptap also fires onUpdate for

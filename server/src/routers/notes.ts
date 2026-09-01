@@ -6,6 +6,7 @@ import { notes, skills, subjects } from "../db/schema";
 import { deriveNoteTitle, htmlToPlainText, sanitizeNoteHtml } from "../domain/noteContent";
 import { markdownToHtml } from "../domain/markdownToHtml";
 import { selectOverviewPassages, selectRelevantPassages } from "../domain/passageRetrieval";
+import { chunkForProofreading, mergeFixes, parseProofreadFixes, PROOFREAD_SYSTEM_PROMPT } from "../domain/proofread";
 import { aiAdapter } from "../ai/index";
 import { authedProcedure, router } from "./trpc";
 
@@ -299,6 +300,50 @@ export const notesRouter = router({
         return { answer, status: "ANSWERED" as const };
       } catch (err) {
         console.error("[notes.ask] AI request failed:", err);
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "AI_REQUEST_FAILED" });
+      }
+    }),
+
+  /**
+   * Proofreads the page the reader is looking at.
+   *
+   * Takes the text from the editor rather than a note id on purpose: the
+   * point is to check what is on screen right now, including the paragraph
+   * just dictated and not yet saved. Nothing is written here — the reply is a
+   * list of suggested replacements and the editor decides what to do with
+   * them, so a check can never alter a note by itself.
+   *
+   * See domain/proofread.ts for why the model is asked for replacements
+   * instead of a corrected copy of the page.
+   */
+  proofread: authedProcedure
+    .input(z.object({ text: z.string().max(200_000) }))
+    .mutation(async ({ input }) => {
+      const chunks = chunkForProofreading(input.text);
+      if (chunks.length === 0) {
+        return { fixes: [], checkedChars: 0, uncheckedChars: 0 };
+      }
+
+      const checkedChars = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+
+      try {
+        // One request at a time. The pages long enough to need several are
+        // rare, and a burst of parallel calls is the quickest way to spend a
+        // free tier's rate limit on a single button press.
+        const batches = [];
+        for (const chunk of chunks) {
+          const raw = await aiAdapter.transform(PROOFREAD_SYSTEM_PROMPT, chunk, { maxTokens: 1500 });
+          batches.push(parseProofreadFixes(raw, chunk));
+        }
+        return {
+          fixes: mergeFixes(batches),
+          checkedChars,
+          // Honest about the tail of a very long page that was not read,
+          // rather than reporting "no mistakes" for text nobody looked at.
+          uncheckedChars: Math.max(0, input.text.length - checkedChars),
+        };
+      } catch (err) {
+        console.error("[notes.proofread] AI request failed:", err);
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "AI_REQUEST_FAILED" });
       }
     }),

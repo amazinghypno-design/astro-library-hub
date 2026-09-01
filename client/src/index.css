@@ -249,3 +249,18 @@ body {
   content: attr(data-placeholder);
   @apply text-navy-700/35 float-left h-0 pointer-events-none;
 }
+
+/* Proofreading marks. These are drawn by the editor view over the text and
+   are never part of the document (see lib/proofread.ts), so they cost the
+   saved note nothing — red while a word is still a question, green once it
+   has been changed, and both gone when the panel closes. */
+.note-content .proofread-issue {
+  @apply bg-red-500/[0.12] rounded-sm;
+  text-decoration: underline wavy #dc2626;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.note-content .proofread-fixed {
+  @apply bg-green-500/20 rounded-sm;
+  box-shadow: inset 0 -2px 0 theme("colors.green.600");
+}

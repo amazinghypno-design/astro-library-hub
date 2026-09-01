@@ -19,6 +19,28 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * Thai by default (`th-TH`): all but a handful of titles in this library are
  * Thai, and the recogniser's language is what decides whether "โหราศาสตร์"
  * comes back as a word or as nonsense.
+ *
+ * Two things the raw API gets wrong for long-form Thai dictation, both fixed
+ * here rather than by cleaning up the text afterwards:
+ *
+ * 1. It repeats itself. In continuous mode Safari (and Chrome on Android)
+ *    hand back a `results` list that still holds every phrase already settled
+ *    in this session, with `resultIndex` reset to 0 — so a naive reader
+ *    re-delivers phrases it has already delivered and one spoken word gets
+ *    typed twice. Every final result is therefore delivered exactly once,
+ *    keyed by its index within the session, and a phrase repeated across a
+ *    restart is recognised as the browser's echo and dropped. Repetition is
+ *    never removed from the *text*: "จริงๆ" and "เร็วๆ" are real Thai words
+ *    and a de-duplicator working on words would eat them.
+ *
+ * 2. It does not say where the reader paused. The recogniser settles a phrase
+ *    whenever it feels like it — mid-sentence, mid-thought — and those breaks
+ *    have nothing to do with where a space belongs. So the silence before each
+ *    phrase is measured here and reported with it: a short gap is the middle
+ *    of a sentence and joins up with no space at all (Thai runs its words
+ *    together), while a deliberate pause of a few seconds is what the reader
+ *    means by a space. Talk for a minute without stopping and a minute of
+ *    unbroken text comes out.
  */
 
 // TypeScript's lib.dom ships SpeechRecognitionResultList but not the
@@ -39,6 +61,32 @@ type SpeechRecognitionLike = {
 };
 
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+/**
+ * A pause at least this long is a space. The reader asked for "three to five
+ * seconds", and this sits a little under three on purpose: the gap measured
+ * here runs from the recogniser's last word to its next one, and the engine
+ * needs a moment of silence to decide a phrase has ended, so a real three
+ * second pause reads as slightly less. Anything shorter than this is somebody
+ * drawing breath in the middle of a sentence, and gets no space.
+ */
+const PAUSE_FOR_SPACE_MS = 2600;
+
+/**
+ * How long after a restart the same phrase coming back again is the browser
+ * echoing itself rather than the reader genuinely saying a word twice. Only
+ * applied across a session boundary, which is the only place the echo happens.
+ */
+const RESTART_ECHO_MS = 4000;
+
+/** A beat for the engine to release the microphone before asking for it back. */
+const RESTART_DELAY_MS = 120;
+/** Second attempt, for when the first lands while the old session is still closing. */
+const RESTART_RETRY_MS = 500;
+/** A session that ends this fast without hearing anything did not really start. */
+const FLAP_MS = 400;
+/** Give up restarting after this many failures in a row, rather than spinning. */
+const MAX_FLAPS = 8;
 
 function getRecognitionCtor(): SpeechRecognitionCtor | null {
   if (typeof window === "undefined") return null;
@@ -72,20 +120,49 @@ function messageForError(code: string): string {
   }
 }
 
+/**
+ * The recogniser leaves a space on the front of each phrase in some browsers
+ * and not in others, and occasionally doubles one up in the middle. Runs of
+ * whitespace collapse to one so that what the caller receives is only the
+ * words — where the spaces go is the caller's decision, made from `pause`.
+ */
+function tidy(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** What the hook knows about a settled phrase besides the words themselves. */
+export type SpokenPhrase = {
+  /** Silence before this phrase, in milliseconds — 0 for the first one. */
+  silenceMs: number;
+  /**
+   * Whether that silence was long enough to be a deliberate break. True means
+   * the reader stopped and meant it: put a space in. False is mid-sentence.
+   */
+  pause: boolean;
+};
+
 export type VoiceSearchOptions = {
   /** Fires on every partial guess, so the field fills in as the reader speaks. */
   onInterim?: (text: string) => void;
-  /** Fires once the recogniser has settled on a phrase. In continuous mode this fires per phrase. */
-  onFinal: (text: string) => void;
+  /**
+   * Fires once the recogniser has settled on a phrase — per phrase in
+   * continuous mode. `phrase.pause` says whether the reader stopped long
+   * enough before it to mean a space; callers that only want the words can
+   * ignore the second argument entirely.
+   */
+  onFinal: (text: string, phrase: SpokenPhrase) => void;
   lang?: string;
+  /** Override the silence that counts as a space. Defaults to ~2.6s. */
+  pauseForSpaceMs?: number;
   /**
    * Keep listening across pauses instead of stopping after one phrase.
    *
    * For dictation this is the whole point: somebody talking through a page of
    * notes stops to think, and a recogniser that ends there would have to be
-   * re-pressed every sentence. Browsers end the session on silence anyway, so
-   * the hook restarts it as long as the microphone was not switched off — the
-   * only thing that clears that intent is `stop()` or an error that means the
+   * re-pressed every sentence. Browsers end the session on silence anyway
+   * (and Chrome caps a session at about a minute regardless), so the hook
+   * restarts it as long as the microphone was not switched off — the only
+   * things that clear that intent are `stop()` and an error meaning the
    * microphone is not available at all.
    */
   continuous?: boolean;
@@ -101,7 +178,13 @@ export type VoiceSearch = {
   toggle: () => void;
 };
 
-export function useVoiceSearch({ onInterim, onFinal, lang = "th-TH", continuous = false }: VoiceSearchOptions): VoiceSearch {
+export function useVoiceSearch({
+  onInterim,
+  onFinal,
+  lang = "th-TH",
+  continuous = false,
+  pauseForSpaceMs = PAUSE_FOR_SPACE_MS,
+}: VoiceSearchOptions): VoiceSearch {
   const [supported] = useState(() => getRecognitionCtor() !== null);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState("");
@@ -114,8 +197,10 @@ export function useVoiceSearch({ onInterim, onFinal, lang = "th-TH", continuous 
   // and rebuild a recogniser that is mid-sentence.
   const onInterimRef = useRef(onInterim);
   const onFinalRef = useRef(onFinal);
+  const pauseMsRef = useRef(pauseForSpaceMs);
   onInterimRef.current = onInterim;
   onFinalRef.current = onFinal;
+  pauseMsRef.current = pauseForSpaceMs;
 
   useEffect(() => {
     const Ctor = getRecognitionCtor();
@@ -129,31 +214,103 @@ export function useVoiceSearch({ onInterim, onFinal, lang = "th-TH", continuous 
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
 
+    // --- what has already been delivered, so nothing is delivered twice ---
+    // Indices are per session: they mean nothing after a restart, so they are
+    // cleared in onstart rather than accumulating.
+    const delivered = new Set<number>();
+    let sessionStartedAt = 0;
+    let flaps = 0;
+    let heardAnythingThisSession = false;
+    // Carried *across* sessions on purpose: the echo guard and the silence
+    // measurement both have to see through a restart, because a restart is
+    // exactly what happens in the middle of a long pause.
+    let lastFinalText = "";
+    let lastFinalAt = 0;
+    let lastFinalSession = 0;
+    let session = 0;
+    // The clock the pause is measured against: the last moment the recogniser
+    // reported hearing anything at all, interim guesses included.
+    let lastHeardAt = 0;
+    // A gap counts once, when a fresh utterance begins — not again for each
+    // interim update inside it.
+    let utteranceOpen = false;
+    let pendingSilence = 0;
+    let restartTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const scheduleRestart = (delay: number) => {
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        if (!wantListeningRef.current) return;
+        try {
+          recognition.start();
+        } catch {
+          // The previous session had not finished closing. One more try, then
+          // let the flap counter deal with it.
+          scheduleRestart(RESTART_RETRY_MS);
+        }
+      }, delay);
+    };
+
     recognition.onstart = () => {
+      session += 1;
+      sessionStartedAt = Date.now();
+      heardAnythingThisSession = false;
+      delivered.clear();
       setListening(true);
       setError("");
     };
 
     recognition.onresult = (e) => {
+      const now = Date.now();
+      // Silence is measured in wall-clock time from the last thing heard, so
+      // it stays honest across the restarts the browser does on its own
+      // during a long pause.
+      if (!utteranceOpen) pendingSilence = lastHeardAt ? now - lastHeardAt : 0;
+      utteranceOpen = true;
+      lastHeardAt = now;
+      heardAnythingThisSession = true;
+      flaps = 0;
+
       let interim = "";
-      let final = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
+      // Never trust resultIndex to be where the new results start: Safari
+      // hands back 0 with the whole session's results behind it. Walk the
+      // list and let `delivered` decide what is actually new.
+      for (let i = 0; i < e.results.length; i++) {
         const result = e.results[i];
-        const text = result[0]?.transcript ?? "";
-        if (result.isFinal) final += text;
-        else interim += text;
+        const text = tidy(result[0]?.transcript ?? "");
+        if (!result.isFinal) {
+          if (i >= e.resultIndex) interim += (interim ? " " : "") + text;
+          continue;
+        }
+        if (delivered.has(i)) continue;
+        delivered.add(i);
+        if (!text) continue;
+
+        // A phrase that comes back identical immediately after a restart is
+        // the browser repeating its own tail, not the reader saying a word
+        // twice. Inside one session the same words really were spoken again.
+        const isRestartEcho =
+          session !== lastFinalSession && text === lastFinalText && now - lastFinalAt < RESTART_ECHO_MS;
+
+        const silenceMs = pendingSilence;
+        pendingSilence = 0;
+        utteranceOpen = false;
+        if (isRestartEcho) continue;
+
+        lastFinalText = text;
+        lastFinalAt = now;
+        lastFinalSession = session;
+        onFinalRef.current(text, { silenceMs, pause: silenceMs >= pauseMsRef.current });
       }
-      if (final.trim()) {
-        onFinalRef.current(final.trim());
-      } else if (interim) {
-        onInterimRef.current?.(interim);
-      }
+
+      if (interim) onInterimRef.current?.(interim);
     };
 
     recognition.onerror = (e) => {
-      // Silence between sentences is not a failure while dictating; every
-      // other code means this attempt is over.
-      if (continuous && e.error === "no-speech") return;
+      // Silence between sentences is not a failure while dictating, and
+      // neither is the abort a restart race produces — both mean "carry on".
+      // Everything else ends this attempt.
+      if (continuous && (e.error === "no-speech" || e.error === "aborted")) return;
       if (e.error !== "no-speech") wantListeningRef.current = false;
       setError(messageForError(e.error));
       setListening(false);
@@ -164,19 +321,26 @@ export function useVoiceSearch({ onInterim, onFinal, lang = "th-TH", continuous 
     // pick the microphone back up after the browser ended the session on its
     // own during a pause.
     recognition.onend = () => {
+      utteranceOpen = false;
       if (continuous && wantListeningRef.current) {
-        try {
-          recognition.start();
+        // A session that ends immediately having heard nothing is the engine
+        // refusing rather than the reader being quiet. A few of those in a
+        // row means restarting will not help, and a tight retry loop with the
+        // microphone would be worse than stopping.
+        if (!heardAnythingThisSession && Date.now() - sessionStartedAt < FLAP_MS) flaps += 1;
+        if (flaps < MAX_FLAPS) {
+          scheduleRestart(RESTART_DELAY_MS);
           return;
-        } catch {
-          // Already restarting; fall through and report the honest state.
         }
+        wantListeningRef.current = false;
+        setError("ไมโครโฟนหยุดทำงานเอง ลองกดไมค์อีกครั้ง");
       }
       setListening(false);
     };
 
     recognitionRef.current = recognition;
     return () => {
+      clearTimeout(restartTimer);
       recognition.onresult = null;
       recognition.onerror = null;
       recognition.onend = null;

@@ -234,3 +234,39 @@ Three things the notebook was asked for the day after it shipped, and what each 
 **Enum growth, not a push.** `drizzle-kit push` offers to drop and recreate a changed enum, which would take every row's `document_type` with it; the value was added with `ALTER TYPE document_type ADD VALUE IF NOT EXISTS 'program' BEFORE 'slide'`, kept as `server/scripts/addProgramDocumentType.mjs`. The homepage counts each type by name, so this had to be run *before* the new code served a request.
 
 **Verified** against the live database and in the browser: the enum reads `ebook, document, spreadsheet, program, slide, poster, other`; the homepage renders the new โปรแกรม Excel tile (0 files, 39 total unchanged) with no console or server errors; `/programs` and `/library?type=program` both resolve to the โปรแกรม Excel view with its empty state, and the chip appears in every category view. The pipeline was run over the bytes of a real `.xlsm` carrying Thai sheet names and a formula: `documentType: program`, `preview: xlsx-inline`, text extracted as `[ฐานคำนวณ] สูตรคำนวณดวง,ค่า,ผลลัพธ์ …`, and the sheet rendered to HTML — identically whether the MIME arrived as `application/vnd.ms-excel.sheet.macroEnabled.12` or as `application/octet-stream`.
+
+## D23 — Dictation: the browser repeats itself, and a pause is where a space goes
+
+**Problem, reported by the owner:** speaking one word into a note typed it twice, and speaking a long passage came out sprinkled with spaces that Thai does not use.
+
+**The duplication was never in the text — it was in how the results were read.** In continuous mode the Web Speech API hands back a `results` list that still holds every phrase already settled in the session, and Safari (and Chrome on Android) reset `resultIndex` to 0 alongside it. The old reader looped from `resultIndex` and typed whatever it found final, so a re-reported phrase was typed a second time. Each final result is now delivered exactly once, keyed by its index within the session (`lib/useVoiceSearch.ts`), and a phrase that comes back identical immediately after the recogniser restarts is recognised as the browser echoing its own tail and dropped.
+
+**No de-duplication of words, ever.** The obvious fix — strip a repeated word from the transcript — would eat จริงๆ, เร็วๆ and every other real Thai repetition, and would fail silently on the day the owner genuinely says a word twice. The repetition is removed where it is created or not at all.
+
+**A pause is the only thing that makes a space.** The recogniser settles phrases where it likes, mid-sentence included, so phrase boundaries say nothing about spacing — the old code added a space at every one of them. The hook now measures the real silence before each phrase (in wall-clock time, so it survives the restarts the browser performs during a long pause) and reports it; the editor adds a space only when the reader stopped for about three seconds, or when one side of the join is not Thai script (a spoken English word still needs separating). Talking without stopping produces one unbroken run of Thai, which is how Thai is written. The threshold sits at 2.6s rather than 3s because the engine needs a moment of silence to close a phrase, so a real three-second pause measures slightly shorter.
+
+**Also fixed while in there:** an `aborted` error raised by a restart race used to kill dictation silently; it is now recoverable, restarts are delayed and retried, and a recogniser that fails to start eight times in a row stops with a message instead of reopening the microphone in a loop.
+
+**Verified** in the browser against the running editor, driving the real hook through a stand-in recogniser fed the exact event shapes the browsers produce: a phrase re-reported with `resultIndex` 0 was typed once; the same phrase repeated after a session restart was dropped, while the same word spoken twice inside one session was kept twice; an 800ms gap joined with no space, a four-second gap added one, and a Latin word after Thai added one; and a session ended by the browser restarted on its own and went on transcribing.
+
+## D24 — Proofreading returns replacements, not a corrected page
+
+**Decision:** `notes.proofread` sends the text of the page being edited to the model and gets back a list of `{wrong, right, reason}` replacements. It never returns a rewritten copy of the page, and it never writes to a note.
+
+**Why not ask for the corrected text:** the reader has to be able to see what would change and refuse it. A rewritten page hides the diff (it would have to be guessed back out), loses the document's formatting on the way through, and — worst — makes a model quietly improving a sentence indistinguishable from a spelling fix. A list of replacements can be highlighted exactly where each one sits, counted, refused one at a time, and applied without the rest of the page being touched.
+
+**Nothing the model says is trusted.** Every fix is checked against the text it was given, and one whose `wrong` half does not appear there verbatim is dropped — a correction to a word nobody wrote is precisely how a proofreader ends up changing a word nobody wrote. Single characters, no-op fixes and repeats go the same way (`domain/proofread.ts`, 15 tests).
+
+**The library's own vocabulary is protected twice.** On the first live run the model offered to change **ทักษา** — a real term — into ทักษะ, "skill". A model that has read far more ordinary Thai than astrological Thai treats this library's vocabulary as typos. So the system prompt now lists the terms explicitly (ทักษา, ลัคนา, ราศี, ปีจร, กาลกิณี, อัฏฐเคราะห์ …) as always-correct, and a short `PROTECTED_TERMS` set refuses them again where no wording can talk the check out of it. A misspelling *of* a protected term does not equal it, so genuine corrections still get through.
+
+**The highlights are decorations, not marks.** Red for a word still in question, green for one just changed, both drawn by the editor view and absent from the document (`lib/proofread.ts`). Marking mistakes with real highlight marks would put the proofreader's opinion into the owner's own page, where it would be saved to the database, sanitized, exported and still sitting there a year later. The green marks are additionally volatile: any change to the document after the fix — an undo above all — clears them, because they describe one action and must not go on claiming a change that has been taken back.
+
+**Verified** in the browser on the running editor, and against the live model. Against the model: a Thai paragraph with three planted typos and six astrology terms returned exactly the three real fixes and left every term alone. In the editor: the check marked all three words where they sat, including two inside `<strong>` and `<em>`; applying them replaced the right characters and kept those marks intact (`<strong>ผูกดวงชะตาจากวันเดือนปีเกิด</strong>`); the saved HTML read back through `getHTML()` contained no decoration markup at all; one Ctrl+Z reverted all three at once and the green marks vanished with them; and red marks stayed on their words while text was typed above them.
+
+## D25 — The toolbar folds away
+
+**Decision:** the editor toolbar has a fold button at the end of its last row; folded, it is a single button on an otherwise clear strip, and the choice is remembered per browser in `localStorage`.
+
+**Why remembered:** somebody reading back a long page wants the page and nothing else, and that preference outlives the visit — re-opening the toolbar on every note would make the button useless to the person who asked for it. Storage access is wrapped, since a private window throws rather than returning nothing; a browser that refuses storage still gets the toggle, just not the memory.
+
+**Verified** in the browser: folding took the toolbar's 32 controls off the page, the state survived navigating away and back, and unfolding restored every control.

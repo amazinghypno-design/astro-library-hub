@@ -256,3 +256,31 @@ export function IconFont(props: IconProps) {
     </svg>
   );
 }
+
+export function IconSpellCheck(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 15.5 7 5.5l4 10" />
+      <path d="M4.4 12h5.2" />
+      <path d="M13.5 19.5 16 22l5.5-6" />
+    </svg>
+  );
+}
+
+export function IconChevronsUp(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m6 15 6-6 6 6" />
+      <path d="m6 20 6-6 6 6" />
+    </svg>
+  );
+}
+
+export function IconChevronsDown(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m6 4 6 6 6-6" />
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
