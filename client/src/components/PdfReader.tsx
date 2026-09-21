@@ -70,6 +70,13 @@ const MAX_ZOOM = 2.5;
 // short and cramped, so it gets a wider stage to fill instead.
 const MAX_WIDTH_PORTRAIT = 760;
 const MAX_WIDTH_LANDSCAPE = 1100;
+// Below this a whole fitted page stops being something you can read at all —
+// a tall page fitted into the few hundred pixels a phone held sideways leaves
+// is a sliver. Only then does the page fill the width and scroll down instead.
+// Kept deliberately low: a scanned book page is often much taller than A4
+// (this library has pages at 1.55), and on a laptop those fit whole at around
+// 370px wide — small, but whole, which is the point, and zoom is right there.
+const MIN_WHOLE_PAGE_WIDTH = 240;
 
 const ZOOM_STEP = 0.25;
 const clampZoom = (z: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
@@ -282,24 +289,26 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
     // aspect < 1) get the wider stage from that point on.
     const maxWidth = defaultAspect < 1 ? MAX_WIDTH_LANDSCAPE : MAX_WIDTH_PORTRAIT;
     const update = () => {
-      const availableWidth = el.clientWidth - 32;
-      if (!isFullscreen) {
-        setFitWidth(Math.min(availableWidth, maxWidth));
-        return;
-      }
-      // Fullscreen fills the screen, so the desktop max widths do not apply.
-      //
-      // Whether height also constrains depends on the page's shape. A landscape
-      // page is the case fullscreen exists for: fit it whole, so nothing hangs
-      // off the bottom. A portrait page fitted whole on a phone held sideways
-      // would shrink to a third of the screen's width and be unreadable — for
-      // those, filling the width and scrolling down is how reading actually
-      // works, and is what every reader app does.
-      const availableHeight = el.clientHeight - 32;
+      // The stage's own padding differs between the two modes (p-4/p-6 inline,
+      // p-2/p-4 fullscreen), and it has to come off both measurements or the
+      // "whole page" below ends up a few pixels taller than the stage.
+      const style = window.getComputedStyle(el);
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      const availableWidth = el.clientWidth - padX;
+      const availableHeight = el.clientHeight - padY;
+      // A whole page, in the shape the document was laid out in, is what the
+      // reader should open on — portrait or landscape, without having to go
+      // fullscreen first. So the stage constrains BOTH sides: the page is as
+      // wide as it can be while its own height still fits the stage. Zoom (and
+      // pinch) is there for whoever then wants it bigger than that.
+      const widthCap = isFullscreen ? availableWidth : Math.min(availableWidth, maxWidth);
       const widthThatFitsHeight = availableHeight / defaultAspect;
-      setFitWidth(
-        isLandscapeDocument ? Math.max(120, Math.min(availableWidth, widthThatFitsHeight)) : availableWidth,
-      );
+      const wholePageWidth = Math.min(widthCap, widthThatFitsHeight);
+      // ...unless the stage is so short that a whole page would be a sliver —
+      // a tall page on a phone held sideways. Fill the width and scroll down
+      // instead, which is what every reader app does in that case.
+      setFitWidth(wholePageWidth >= Math.min(widthCap, MIN_WHOLE_PAGE_WIDTH) ? wholePageWidth : widthCap);
     };
     update();
     const observer = new ResizeObserver(update);
@@ -307,7 +316,7 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
     return () => observer.disconnect();
     // See the note in OfficePreview: rotation is a first-class trigger here,
     // not just whatever resize event the browser happens to emit.
-  }, [status, defaultAspect, isFullscreen, isLandscapeDocument, orientation]);
+  }, [status, defaultAspect, isFullscreen, orientation]);
 
   const pageWidth = Math.round(fitWidth * zoomLevel);
 
@@ -765,9 +774,13 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
         </div>
       )}
       {showLandscapeHint && <LandscapeDocumentHint onOpenFullscreen={enterFullscreen} />}
+      {/* Inline, the stage is a fixed height rather than a max-height: it is what
+          a whole page is fitted to above, so it has to be a known size before the
+          page is measured against it. dvh, not vh, for the same reason fullscreen
+          uses it — mobile browser bars. */}
       <div
         ref={scrollRef}
-        className={`overflow-auto bg-navy-900/[0.03] ${isFullscreen ? "flex-1 min-h-0 p-2 sm:p-4" : "max-h-[70vh] p-4 sm:p-6"}`}
+        className={`overflow-auto bg-navy-900/[0.03] ${isFullscreen ? "flex-1 min-h-0 p-2 sm:p-4" : "h-[82dvh] min-h-[320px] p-4 sm:p-6"}`}
       >
         <div style={pinchScale !== 1 ? { transform: `scale(${pinchScale})`, transformOrigin: "top center" } : undefined}>
           {docRef.current &&
