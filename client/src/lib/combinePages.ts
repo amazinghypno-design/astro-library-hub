@@ -76,3 +76,48 @@ export async function shareAllPages(pages: CapturedPage[]): Promise<"shared" | "
     return "unsupported";
   }
 }
+
+/**
+ * Writes every captured page as its own PNG.
+ *
+ * This is the only route to "five separate images in a chat" on a desktop.
+ * The clipboard cannot carry more than one image, so the pages have to exist
+ * as files before anything can take all five at once — after this the reader
+ * selects them in Finder and drags or copies them into the chat in one go.
+ *
+ * Given a directory picker (Chrome, Edge) the pages go into one folder the
+ * reader chooses, which keeps them together and asks permission once.
+ * Everywhere else they download one after another.
+ */
+export async function saveAllPages(pages: CapturedPage[]): Promise<"folder" | "downloads" | "cancelled"> {
+  const picker = (window as unknown as { showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle> }).showDirectoryPicker;
+  if (picker) {
+    let dir: FileSystemDirectoryHandle;
+    try {
+      dir = await picker();
+    } catch {
+      return "cancelled";
+    }
+    for (const page of pages) {
+      const handle = await dir.getFileHandle(page.fileName, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(page.blob);
+      await writable.close();
+    }
+    return "folder";
+  }
+
+  for (const page of pages) {
+    const url = URL.createObjectURL(page.blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = page.fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    // Browsers drop downloads fired in the same tick as one another.
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return "downloads";
+}

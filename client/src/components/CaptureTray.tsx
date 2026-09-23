@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { CaptureTrayApi } from "../lib/useCaptureTray";
 import { copyImageToClipboard, prefersShareSheet, shareOrSaveImage } from "../lib/shareOrSaveImage";
-import { combinePagesToPng, shareAllPages } from "../lib/combinePages";
+import { combinePagesToPng, saveAllPages, shareAllPages } from "../lib/combinePages";
 import { IconClose } from "./icons";
 
 /**
@@ -31,6 +31,31 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
   const verb = sharing ? "ส่ง" : "คัดลอก";
 
   if (tray.pages.length === 0) return null;
+
+  /**
+   * Every page as its own file. The only route to a chat holding five
+   * separate images on a desktop: the clipboard carries one image and no
+   * more, so the pages must exist as files before anything can take them all
+   * at once.
+   */
+  async function saveAll() {
+    if (busy || tray.pages.length === 0) return;
+    setBusy(true);
+    try {
+      const where = await saveAllPages(tray.pages);
+      if (where === "cancelled") return;
+      setSent(tray.pages.length);
+      setNote(
+        where === "folder"
+          ? `บันทึกแยก ${tray.pages.length} ไฟล์ลงโฟลเดอร์ที่เลือกแล้ว — เปิดโฟลเดอร์ เลือกทุกไฟล์ แล้วลากมาวางในแชทได้เลย`
+          : `บันทึกแยก ${tray.pages.length} ไฟล์ลงโฟลเดอร์ดาวน์โหลดแล้ว — เลือกทุกไฟล์แล้วลากมาวางในแชทได้เลย`,
+      );
+    } catch {
+      setNote("บันทึกไฟล์ไม่สำเร็จ ลองอีกครั้ง");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /** Every page in one go — as separate files where that is possible, as one
    *  stacked image where it is not. */
@@ -99,6 +124,17 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
     <div className="flex flex-col gap-2 pt-2 border-t border-navy-900/[0.06]">
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium text-navy-800">แคปไว้ {tray.pages.length} หน้า</span>
+        {tray.pages.length > 1 && !sharing && (
+          <button
+            type="button"
+            onClick={saveAll}
+            title="บันทึกทุกหน้าเป็นไฟล์แยกกัน แล้วเลือกทั้งหมดลากเข้าแชททีเดียว — คลิปบอร์ดพารูปไปได้ทีละรูปเดียว ไฟล์จึงเป็นทางเดียวที่ได้รูปแยกครบ"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-gold-500/50 text-gold-700 bg-gold-400/10 hover:bg-gold-400/20 disabled:opacity-40 transition-colors"
+            disabled={busy}
+          >
+            {busy ? "กำลังทำ..." : `แยกเป็น ${tray.pages.length} ไฟล์`}
+          </button>
+        )}
         {tray.pages.length > 1 && (
           <button
             type="button"
@@ -109,7 +145,7 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
                 ? "ส่งทุกหน้าพร้อมกันเป็นรูปแยกกัน"
                 : "รวมทุกหน้าเป็นรูปเดียวแล้วคัดลอก — คลิปบอร์ดเก็บได้ทีละรูปเดียว วางครั้งเดียวจึงต้องรวมกันมา"
             }
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-gold-500/50 text-gold-700 bg-gold-400/10 hover:bg-gold-400/20 disabled:opacity-40 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40 transition-colors"
           >
             {busy ? "กำลังทำ..." : sharing ? `ส่งทั้งหมด ${tray.pages.length} หน้า` : `รวม ${tray.pages.length} หน้าเป็นรูปเดียว`}
           </button>
