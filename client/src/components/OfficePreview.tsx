@@ -7,7 +7,7 @@ import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
 import LandscapeDocumentHint from "./LandscapeDocumentHint";
 import BookmarkMenu from "./BookmarkMenu";
-import { safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
+import { deliveryMessage, safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
 import {
   addDrawingLocal,
   clearPageDrawingsLocal,
@@ -97,6 +97,8 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
   const [activeTool, setActiveTool] = useState<DrawToolId | null>(null);
   const [drawColor, setDrawColor] = useState(PEN_COLORS[0]);
   const [capturing, setCapturing] = useState(false);
+  // What happened to the last capture ("คัดลอกแล้ว…"), shown on the button itself.
+  const [captureNote, setCaptureNote] = useState<string | null>(null);
   // Fullscreen only — see the same note in PdfReader.
   const [toolbarsHidden, setToolbarsHidden] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
@@ -452,7 +454,11 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
 
       const label = props.kind === "xlsx" ? `${sheets?.[activeSheet]?.name ?? "แผ่นงาน"} - หน้า ${currentPage}` : `หน้า ${currentPage}`;
       const name = `${safeFileName(title ?? "เอกสาร", "เอกสาร")} - ${label}.png`;
-      await shareOrSaveImage(blob, name, title ?? name, `${label} จาก ${title ?? "เอกสาร"}`);
+      const note = deliveryMessage(await shareOrSaveImage(blob, name));
+      if (note) {
+        setCaptureNote(note);
+        window.setTimeout(() => setCaptureNote(null), 2500);
+      }
     } catch {
       setCaptureError("แคปหน้านี้ไม่สำเร็จ ลองเลื่อนให้หน้านี้แสดงเต็มจอแล้วลองอีกครั้ง");
     } finally {
@@ -705,7 +711,7 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
 
             <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
             <button type="button" onClick={captureCurrentPage} disabled={capturing} title="แคปหน้านี้เป็นรูปภาพเพื่อส่งให้คนอื่น" className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40">
-              <IconCamera width={15} height={15} /> <span className="reader-label">{capturing ? "กำลังแคป..." : "แคปหน้านี้"}</span>
+              <IconCamera width={15} height={15} /> <span className="reader-label">{captureNote ?? (capturing ? "กำลังแคป..." : "แคปหน้านี้")}</span>
             </button>
           </div>
 

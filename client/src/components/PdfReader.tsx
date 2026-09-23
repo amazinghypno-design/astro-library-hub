@@ -17,7 +17,7 @@ import {
   IconUndo,
 } from "./icons";
 import { toThaiPdfErrorMessage } from "../lib/errorMessages";
-import { safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
+import { deliveryMessage, safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
 import { useReaderFullscreen, type ReaderHandle } from "../lib/useReaderFullscreen";
 import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
@@ -140,6 +140,8 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
   const [drawMode, setDrawMode] = useState(false);
   const [drawToolbarOpen, setDrawToolbarOpen] = useState(false);
   const [capturingPage, setCapturingPage] = useState(false);
+  // What happened to the last capture ("คัดลอกแล้ว…"), shown on the button itself.
+  const [captureNote, setCaptureNote] = useState<string | null>(null);
   // Fullscreen only: lets the reader put every bar away and have the whole
   // screen be the page, with one tap to bring the tools back.
   const [toolbarsHidden, setToolbarsHidden] = useState(false);
@@ -610,7 +612,11 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
 
       const displayPage = Math.max(1, pageNumber - pageOffset);
       const fileName = `${safeFileName(title ?? "", "หน้าหนังสือ")} - หน้า ${displayPage}.png`;
-      await shareOrSaveImage(blob, fileName, title ?? fileName, `หน้า ${displayPage} จาก ${title ?? "หนังสือ"}`);
+      const note = deliveryMessage(await shareOrSaveImage(blob, fileName));
+      if (note) {
+        setCaptureNote(note);
+        window.setTimeout(() => setCaptureNote(null), 2500);
+      }
     } catch {
       alert("แคปหน้านี้ไม่สำเร็จ ลองอีกครั้ง");
     } finally {
@@ -939,7 +945,7 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
             className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border border-navy-900/15 text-navy-700 hover:border-gold-500 hover:bg-gold-400/5 disabled:opacity-40 transition-colors"
           >
             <IconCamera width={15} height={15} />
-            <span className="reader-label">{capturingPage ? "กำลังแคป..." : "แคปหน้านี้"}</span>
+            <span className="reader-label">{captureNote ?? (capturingPage ? "กำลังแคป..." : "แคปหน้านี้")}</span>
           </button>
           <span className="reader-divider w-px h-5 bg-navy-900/10 hidden sm:block" aria-hidden />
           <form onSubmit={onJumpSubmit} className="flex items-center gap-1.5">
