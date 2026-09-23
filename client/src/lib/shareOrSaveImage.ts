@@ -31,6 +31,27 @@
  */
 export type ImageDelivery = "copied" | "shared" | "cancelled" | "downloaded";
 
+/** True where the share sheet is the right destination — a phone, not a desk. */
+export function prefersShareSheet(): boolean {
+  return navigator.maxTouchPoints > 0 && !!navigator.canShare;
+}
+
+/**
+ * Puts the image itself on the clipboard and says whether that worked. Used
+ * when a capture should land on the clipboard without also offering to
+ * download — the page is kept in the capture tray either way, so a failed
+ * copy costs nothing and needs no fallback.
+ */
+export async function copyImageToClipboard(blob: Blob): Promise<boolean> {
+  if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) return false;
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** True while a share sheet or clipboard write from this module is in flight. */
 let delivering = false;
 
@@ -78,18 +99,6 @@ export async function shareOrSaveImage(blob: Blob, fileName: string): Promise<Im
     return "downloaded";
   } finally {
     delivering = false;
-  }
-}
-
-/** What to tell the reader once the image has gone somewhere. */
-export function deliveryMessage(delivery: ImageDelivery): string | null {
-  switch (delivery) {
-    case "copied":
-      return "คัดลอกแล้ว วางในแชทได้เลย";
-    case "downloaded":
-      return "บันทึกเป็นไฟล์แล้ว";
-    default:
-      return null;
   }
 }
 

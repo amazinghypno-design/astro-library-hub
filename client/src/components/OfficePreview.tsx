@@ -7,7 +7,9 @@ import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
 import LandscapeDocumentHint from "./LandscapeDocumentHint";
 import BookmarkMenu from "./BookmarkMenu";
-import { deliveryMessage, safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
+import { copyImageToClipboard, prefersShareSheet, safeFileName } from "../lib/shareOrSaveImage";
+import { useCaptureTray } from "../lib/useCaptureTray";
+import CaptureTray from "./CaptureTray";
 import {
   addDrawingLocal,
   clearPageDrawingsLocal,
@@ -99,6 +101,8 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
   const [capturing, setCapturing] = useState(false);
   // What happened to the last capture ("คัดลอกแล้ว…"), shown on the button itself.
   const [captureNote, setCaptureNote] = useState<string | null>(null);
+  // Captured pages pile up here instead of leaving one at a time.
+  const captureTray = useCaptureTray();
   // Fullscreen only — see the same note in PdfReader.
   const [toolbarsHidden, setToolbarsHidden] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
@@ -454,11 +458,13 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
 
       const label = props.kind === "xlsx" ? `${sheets?.[activeSheet]?.name ?? "แผ่นงาน"} - หน้า ${currentPage}` : `หน้า ${currentPage}`;
       const name = `${safeFileName(title ?? "เอกสาร", "เอกสาร")} - ${label}.png`;
-      const note = deliveryMessage(await shareOrSaveImage(blob, name));
-      if (note) {
-        setCaptureNote(note);
-        window.setTimeout(() => setCaptureNote(null), 2500);
-      }
+      captureTray.add(blob, name, label);
+
+      // Same rule as the PDF reader: the clipboard on a desk, the tray on a
+      // phone, so collecting a run of pages never opens a share sheet per page.
+      const copied = !prefersShareSheet() && (await copyImageToClipboard(blob));
+      setCaptureNote(copied ? "คัดลอกแล้ว วางได้เลย" : "เก็บไว้ในถาดแล้ว");
+      window.setTimeout(() => setCaptureNote(null), 2500);
     } catch {
       setCaptureError("แคปหน้านี้ไม่สำเร็จ ลองเลื่อนให้หน้านี้แสดงเต็มจอแล้วลองอีกครั้ง");
     } finally {
@@ -714,6 +720,8 @@ const OfficePreview = forwardRef<ReaderHandle, OfficePreviewProps>(function Offi
               <IconCamera width={15} height={15} /> <span className="reader-label">{captureNote ?? (capturing ? "กำลังแคป..." : "แคปหน้านี้")}</span>
             </button>
           </div>
+
+          <CaptureTray tray={captureTray} />
 
           {drawToolbarOpen && fileId && (
             <div className="flex flex-wrap items-center gap-2 text-sm pt-1 border-t border-navy-900/[0.06]">

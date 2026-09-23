@@ -249,6 +249,14 @@ export function IconPlus(props: IconProps) {
   );
 }
 
+export function IconClose(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
 export function IconHighlighter(props: IconProps) {
   return (
     <svg {...base} {...props}>

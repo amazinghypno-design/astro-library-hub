@@ -17,7 +17,9 @@ import {
   IconUndo,
 } from "./icons";
 import { toThaiPdfErrorMessage } from "../lib/errorMessages";
-import { deliveryMessage, safeFileName, shareOrSaveImage } from "../lib/shareOrSaveImage";
+import { copyImageToClipboard, prefersShareSheet, safeFileName } from "../lib/shareOrSaveImage";
+import { useCaptureTray } from "../lib/useCaptureTray";
+import CaptureTray from "./CaptureTray";
 import { useReaderFullscreen, type ReaderHandle } from "../lib/useReaderFullscreen";
 import { useIsTouchDevice, useOrientation } from "../lib/useViewport";
 import RotateDeviceOverlay from "./RotateDeviceOverlay";
@@ -142,6 +144,8 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
   const [capturingPage, setCapturingPage] = useState(false);
   // What happened to the last capture ("คัดลอกแล้ว…"), shown on the button itself.
   const [captureNote, setCaptureNote] = useState<string | null>(null);
+  // Captured pages pile up here instead of leaving one at a time.
+  const captureTray = useCaptureTray();
   // Fullscreen only: lets the reader put every bar away and have the whole
   // screen be the page, with one tap to bring the tools back.
   const [toolbarsHidden, setToolbarsHidden] = useState(false);
@@ -611,12 +615,17 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
       if (!blob) throw new Error("CANVAS_EXPORT_FAILED");
 
       const displayPage = Math.max(1, pageNumber - pageOffset);
-      const fileName = `${safeFileName(title ?? "", "หน้าหนังสือ")} - หน้า ${displayPage}.png`;
-      const note = deliveryMessage(await shareOrSaveImage(blob, fileName));
-      if (note) {
-        setCaptureNote(note);
-        window.setTimeout(() => setCaptureNote(null), 2500);
-      }
+      const label = `หน้า ${displayPage}`;
+      const fileName = `${safeFileName(title ?? "", "หน้าหนังสือ")} - ${label}.png`;
+      captureTray.add(blob, fileName, label);
+
+      // On a desk the clipboard is the point, so the page just captured is put
+      // there straight away and one page stays a one-click job. On a phone it
+      // waits in the tray instead: opening the share sheet on every capture
+      // would make collecting a run of pages unbearable.
+      const copied = !prefersShareSheet() && (await copyImageToClipboard(blob));
+      setCaptureNote(copied ? "คัดลอกแล้ว วางได้เลย" : "เก็บไว้ในถาดแล้ว");
+      window.setTimeout(() => setCaptureNote(null), 2500);
     } catch {
       alert("แคปหน้านี้ไม่สำเร็จ ลองอีกครั้ง");
     } finally {
@@ -1117,6 +1126,10 @@ const PdfReader = forwardRef<ReaderHandle, PdfReaderProps>(function PdfReader(
             </button>
           </div>
         )}
+
+        {/* Sits under the toolbar rather than beside the capture button: it
+            grows a row of thumbnails, which a row of buttons cannot hold. */}
+        <CaptureTray tray={captureTray} />
 
         </>
       )}
