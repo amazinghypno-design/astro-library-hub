@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { IconDownload, IconExpand } from "../components/icons";
+import { IconDownload, IconExpand, IconLink } from "../components/icons";
 import FilePreviewPane, { hasOwnReader } from "../components/FilePreviewPane";
 import type { ReaderHandle } from "../lib/useReaderFullscreen";
 import FileActionsMenu from "../components/FileActionsMenu";
@@ -81,6 +81,17 @@ export default function FileDetail() {
               <IconExpand width={18} height={18} /> เปิดเต็มหน้าต่าง
             </a>
           )
+        )}
+        {/* The lending desk sits at the foot of a page that is mostly reader,
+            so from up here it may as well not exist. This is the signpost. */}
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => document.getElementById("share-link-panel")?.scrollIntoView({ block: "start", behavior: "smooth" })}
+            className="btn-outline inline-flex items-center gap-2"
+          >
+            <IconLink width={18} height={18} /> ลิงก์แชร์
+          </button>
         )}
       </div>
 

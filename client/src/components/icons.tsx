@@ -117,6 +117,15 @@ export function IconDownload(props: IconProps) {
   );
 }
 
+export function IconLink(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 13.5a3.5 3.5 0 0 0 5 0l3-3a3.54 3.54 0 0 0-5-5l-1.5 1.5" />
+      <path d="M14 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.54 3.54 0 0 0 5 5l1.5-1.5" />
+    </svg>
+  );
+}
+
 export function IconExpand(props: IconProps) {
   return (
     <svg {...base} {...props}>
