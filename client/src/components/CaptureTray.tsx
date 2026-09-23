@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CaptureTrayApi } from "../lib/useCaptureTray";
 import { copyImageToClipboard, prefersShareSheet, shareOrSaveImage } from "../lib/shareOrSaveImage";
 import { combinePagesToPng, saveAllPages, shareAllPages } from "../lib/combinePages";
@@ -26,11 +26,27 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
   const [sent, setSent] = useState(0);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // Which page is open full size. A thumbnail 54px wide cannot answer "did I
+  // capture the right page?", which is the question being asked of it.
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   const sharing = prefersShareSheet();
   const verb = sharing ? "ส่ง" : "คัดลอก";
 
+  useEffect(() => {
+    if (previewIndex === null) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setPreviewIndex(null);
+      if (e.key === "ArrowRight") setPreviewIndex((i) => (i === null ? i : Math.min(i + 1, tray.pages.length - 1)));
+      if (e.key === "ArrowLeft") setPreviewIndex((i) => (i === null ? i : Math.max(i - 1, 0)));
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewIndex, tray.pages.length]);
+
   if (tray.pages.length === 0) return null;
+
+  const preview = previewIndex === null ? null : (tray.pages[previewIndex] ?? null);
 
   /**
    * Every page as its own file. The only route to a chat holding five
@@ -177,9 +193,8 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
           <li key={page.id} className="relative">
             <button
               type="button"
-              onClick={() => hand(i)}
-              disabled={busy}
-              title={`${verb} ${page.label}`}
+              onClick={() => setPreviewIndex(i)}
+              title={`ดู ${page.label} ขนาดใหญ่`}
               className={`block w-[54px] h-[70px] rounded-lg overflow-hidden border transition-colors disabled:opacity-40 ${
                 i < sent ? "border-emerald-500/60 opacity-60" : "border-navy-900/15 hover:border-gold-500"
               }`}
@@ -205,6 +220,74 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
       </ul>
 
       {note && <p className="text-xs text-emerald-700">{note}</p>}
+
+      {preview && (
+        <div
+          role="dialog"
+          aria-label={`${preview.label} ขนาดใหญ่`}
+          onClick={() => setPreviewIndex(null)}
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-navy-950/80 p-4 backdrop-blur-sm"
+        >
+          <img
+            src={preview.url}
+            alt={preview.label}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[75vh] max-w-full rounded-lg bg-white object-contain shadow-card-hover"
+          />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex flex-wrap items-center justify-center gap-2 text-sm text-ivory"
+          >
+            <span className="font-medium tabular-nums">
+              {preview.label}
+              <span className="text-ivory/50"> · {previewIndex! + 1}/{tray.pages.length}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPreviewIndex((i) => Math.max(0, (i ?? 0) - 1))}
+              disabled={previewIndex === 0}
+              className="px-3 py-1 rounded-lg border border-ivory/25 hover:border-gold-400 disabled:opacity-30"
+            >
+              ก่อนหน้า
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewIndex((i) => Math.min(tray.pages.length - 1, (i ?? 0) + 1))}
+              disabled={previewIndex === tray.pages.length - 1}
+              className="px-3 py-1 rounded-lg border border-ivory/25 hover:border-gold-400 disabled:opacity-30"
+            >
+              ถัดไป
+            </button>
+            <button
+              type="button"
+              onClick={() => hand(previewIndex!)}
+              disabled={busy}
+              className="px-3 py-1 rounded-lg border border-gold-400/60 bg-gold-400/15 text-gold-200 hover:bg-gold-400/25 disabled:opacity-40"
+            >
+              {busy ? "กำลังทำ..." : `${verb}หน้านี้`}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const i = previewIndex!;
+                tray.remove(preview.id);
+                setSent((s) => (i < s ? s - 1 : s));
+                setPreviewIndex(tray.pages.length <= 1 ? null : Math.min(i, tray.pages.length - 2));
+              }}
+              className="px-3 py-1 rounded-lg border border-ivory/25 text-red-200 hover:border-red-300"
+            >
+              เอาหน้านี้ออก
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewIndex(null)}
+              className="px-3 py-1 rounded-lg border border-ivory/25 hover:border-gold-400"
+            >
+              ปิด
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
