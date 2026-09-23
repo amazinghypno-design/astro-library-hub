@@ -110,9 +110,12 @@ export default function FileDetail() {
         />
       </div>
 
-      <BookChatPanel fileId={file.id} canAsk={file.canAskAi} />
-
+      {/* Directly under the reader, not at the foot of the page: lending a
+          book is something you decide while looking at it, and anything below
+          the AI panel is far enough down to count as missing. */}
       {isAdmin && id && <ShareLinkPanel fileId={id} />}
+
+      <BookChatPanel fileId={file.id} canAsk={file.canAskAi} />
     </div>
   );
 }
