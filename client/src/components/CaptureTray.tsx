@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { CaptureTrayApi } from "../lib/useCaptureTray";
 import { copyImageToClipboard, prefersShareSheet, shareOrSaveImage } from "../lib/shareOrSaveImage";
 import { combinePagesToPng, saveAllPages, shareAllPages } from "../lib/combinePages";
-import { IconClose } from "./icons";
+import { IconClose, IconTrash } from "./icons";
 
 /**
  * The strip under the reader toolbar showing what has been captured so far.
@@ -29,6 +29,9 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
   // Which page is open full size. A thumbnail 54px wide cannot answer "did I
   // capture the right page?", which is the question being asked of it.
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  // "ล้างทั้งหมด" takes two presses. A tray of ten pages is ten captures'
+  // worth of work, and one stray click should not be able to throw it away.
+  const [armedClear, setArmedClear] = useState(false);
 
   const sharing = prefersShareSheet();
   const verb = sharing ? "ส่ง" : "คัดลอก";
@@ -44,7 +47,25 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [previewIndex, tray.pages.length]);
 
+  useEffect(() => {
+    if (!armedClear) return;
+    const t = window.setTimeout(() => setArmedClear(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [armedClear]);
+
   if (tray.pages.length === 0) return null;
+
+  function clearAll() {
+    if (!armedClear) {
+      setArmedClear(true);
+      return;
+    }
+    tray.clear();
+    setArmedClear(false);
+    setSent(0);
+    setNote(null);
+    setPreviewIndex(null);
+  }
 
   const preview = previewIndex === null ? null : (tray.pages[previewIndex] ?? null);
 
@@ -174,17 +195,6 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
         >
           {busy ? "กำลังทำ..." : nextLabel}
         </button>
-        <button
-          type="button"
-          onClick={() => {
-            tray.clear();
-            setSent(0);
-            setNote(null);
-          }}
-          className="text-navy-700/60 hover:text-red-700 hover:underline"
-        >
-          ล้างทั้งหมด
-        </button>
         <span className="text-navy-700/50 text-xs">ยังไม่ได้บันทึกลงเครื่อง — เก็บไว้จนกว่าจะปิดหน้านี้</span>
       </div>
 
@@ -217,6 +227,23 @@ export default function CaptureTray({ tray }: { tray: CaptureTrayApi }) {
             </button>
           </li>
         ))}
+        {tray.pages.length > 1 && (
+          <li>
+            <button
+              type="button"
+              onClick={clearAll}
+              title={armedClear ? "กดอีกครั้งเพื่อยืนยัน" : `เอาทั้ง ${tray.pages.length} หน้าออกจากถาดทีเดียว`}
+              className={`min-w-[54px] px-2.5 h-[70px] whitespace-nowrap flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed text-[11px] leading-tight transition-colors ${
+                armedClear
+                  ? "border-red-400 bg-red-50 text-red-700"
+                  : "border-navy-900/20 text-navy-700/70 hover:border-red-300 hover:text-red-700"
+              }`}
+            >
+              <IconTrash width={16} height={16} />
+              {armedClear ? `ลบ ${tray.pages.length} หน้า?` : "ล้างทั้งหมด"}
+            </button>
+          </li>
+        )}
       </ul>
 
       {note && <p className="text-xs text-emerald-700">{note}</p>}
