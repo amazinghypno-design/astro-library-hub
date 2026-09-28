@@ -133,9 +133,30 @@ export const libraryRouter = router({
     // counts exhausts it (PostgresError EMAXCONNSESSION) — which fails the
     // whole tRPC batch, so the homepage renders nothing at all. Conditional
     // aggregates get the same numbers from a single scan instead.
+    //
+    // The per-category counts ride along in the same statement as a JSON
+    // subquery rather than a second query: the API and the database sit on
+    // different continents, and every sequential statement costs a full
+    // round-trip between them (~130ms) — a second query here was half of this
+    // endpoint's time.
     const publishedSql = sql`${libraryFiles.status} = 'published' and ${libraryFiles.visibility} = 'public'`;
     const publishedCount = (extra?: SQL) =>
       sql<number>`count(*) filter (where ${publishedSql}${extra ? sql` and ${extra}` : sql``})`.mapWith(Number);
+
+    type CategoryCount = { categoryId: string; name: string; slug: string; fileCount: number };
+    const categoryCountsJson = sql<CategoryCount[]>`(
+      select coalesce(
+        json_agg(json_build_object('categoryId', c.id, 'name', c.name, 'slug', c.slug, 'fileCount', c.file_count)
+                 order by c.file_count desc),
+        '[]'::json)
+      from (
+        select cat.id, cat.name, cat.slug, count(f.id)::int as file_count
+        from ${libraryCategories} cat
+        left join ${libraryFiles} f
+          on f.category_id = cat.id and f.status = 'published' and f.visibility = 'public'
+        group by cat.id
+      ) c
+    )`.mapWith((v: unknown) => (typeof v === "string" ? JSON.parse(v) : v) as CategoryCount[]);
 
     const [totals] = await db
       .select({
@@ -151,20 +172,9 @@ export const libraryRouter = router({
         slide: publishedCount(sql`${libraryFiles.documentType} = 'slide'`),
         poster: publishedCount(sql`${libraryFiles.documentType} = 'poster'`),
         other: publishedCount(sql`${libraryFiles.documentType} = 'other'`),
+        categoryCounts: categoryCountsJson,
       })
       .from(libraryFiles);
-
-    const categoryCounts = await db
-      .select({
-        categoryId: libraryCategories.id,
-        name: libraryCategories.name,
-        slug: libraryCategories.slug,
-        fileCount: count(libraryFiles.id),
-      })
-      .from(libraryCategories)
-      .leftJoin(libraryFiles, and(eq(libraryFiles.categoryId, libraryCategories.id), PUBLIC_FILTER))
-      .groupBy(libraryCategories.id)
-      .orderBy(desc(count(libraryFiles.id)));
 
     return {
       total: totals.total,
@@ -181,7 +191,7 @@ export const libraryRouter = router({
         poster: totals.poster,
         other: totals.other,
       },
-      categoryCounts,
+      categoryCounts: totals.categoryCounts,
     };
   }),
 
@@ -235,18 +245,27 @@ export const libraryRouter = router({
         : undefined;
       const where = and(PUBLIC_FILTER, keywordFilter, categoryFilter, authorFilter, typeFilter, subjectFilter);
 
-      const [totalRow] = await db.select({ n: count() }).from(libraryFiles).where(where);
-      const files = await db
-        .select(LIST_FILE_COLUMNS)
+      // The total comes back on every row as a window count, so the page and
+      // its total cost one round-trip to the database instead of two. Only a
+      // page past the end has no row to carry it, and only then is it asked
+      // for separately.
+      const rows = await db
+        .select({ ...LIST_FILE_COLUMNS, total: sql<number>`count(*) over ()`.mapWith(Number) })
         .from(libraryFiles)
         .where(where)
         .orderBy(desc(libraryFiles.createdAt))
         .limit(input.pageSize)
         .offset((input.page - 1) * input.pageSize);
 
+      let total = rows[0]?.total ?? 0;
+      if (rows.length === 0 && input.page > 1) {
+        const [totalRow] = await db.select({ n: count() }).from(libraryFiles).where(where);
+        total = totalRow.n;
+      }
+
       return {
-        files: files.map((f) => ({ ...f, preview: previewCapability(f.mimeType, f.originalName) })),
-        total: totalRow.n,
+        files: rows.map(({ total: _total, ...f }) => ({ ...f, preview: previewCapability(f.mimeType, f.originalName) })),
+        total,
         page: input.page,
         pageSize: input.pageSize,
       };

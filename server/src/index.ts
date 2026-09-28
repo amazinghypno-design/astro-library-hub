@@ -2,7 +2,7 @@ import "./env";
 import express from "express";
 import cors from "cors";
 import session from "express-session";
-import connectPgSimple from "connect-pg-simple";
+import { createCachedPgSessionStore } from "./auth/cachedSessionStore";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { Readable } from "node:stream";
 import { eq, sql } from "drizzle-orm";
@@ -71,10 +71,11 @@ app.use((err: unknown, _req: express.Request, res: express.Response, next: expre
 // cross-site request, and browsers only attach cookies to those when the
 // cookie is SameSite=None + Secure. Locally both run on http://localhost
 // (same-site), where Secure cookies don't work at all, hence the split.
-const PgSession = connectPgSimple(session);
+// Wrapped so a signed-in request doesn't pay two extra database round-trips
+// for its session — see auth/cachedSessionStore.ts.
 app.use(
   session({
-    store: new PgSession({
+    store: createCachedPgSessionStore(session, {
       // Its own pool, separate from db/client.ts — capped for the same reason
       // (see the note there). Session reads are one small query per request.
       conObject: { connectionString: process.env.DATABASE_URL, max: 2 },
