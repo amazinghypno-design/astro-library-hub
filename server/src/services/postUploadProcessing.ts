@@ -6,6 +6,7 @@ import { isOcrableImage, isTextLayerThin } from "../domain/needsOcr";
 import { storageAdapter } from "../storage/index";
 import { extractOfficeText, hasExtractableText } from "./officeText";
 import { ocrEnabled } from "../ocr/index";
+import { invalidateReadCache } from "../readCache";
 
 /**
  * Everything expensive that happens to a newly uploaded PDF — text extraction
@@ -75,7 +76,13 @@ export interface PostUploadOptions {
 }
 
 export function enqueuePostUploadProcessing(fileId: string, options: PostUploadOptions): void {
-  queue = queue.then(() => processUploadedFile(fileId, options)).catch(() => {});
+  // Processing fills in page counts, text and covers after the upload has
+  // already been answered — outside any mutation, so it clears the read cache
+  // itself once it has written (see readCache.ts).
+  queue = queue
+    .then(() => processUploadedFile(fileId, options))
+    .catch(() => {})
+    .finally(invalidateReadCache);
 }
 
 /** Exposed for tests and scripts; normal callers use the queue. */

@@ -111,7 +111,9 @@ app.use(
  * transient database blip would be noise, not signal.
  */
 app.get("/health", (_req, res) => {
-  res.json({ ok: true });
+  // upSeconds says whether a slow visit met a server that had just woken from
+  // the free tier's sleep (small number) or one that was already running.
+  res.json({ ok: true, upSeconds: Math.round(process.uptime()) });
   void db.execute(sql`select 1`).catch(() => {});
 });
 

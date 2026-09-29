@@ -13,6 +13,7 @@ import { extractOfficeText, hasExtractableText } from "../services/officeText";
 import { peekOfficePreview, renderOfficePreviewCached, STORAGE_READ_FAILED } from "../services/officePreview";
 
 import { aiAdapter } from "../ai/index";
+import { cachedRead } from "../readCache";
 
 const PUBLIC_FILTER = and(eq(libraryFiles.status, "published"), eq(libraryFiles.visibility, "public"));
 
@@ -153,80 +154,83 @@ async function backfillOfficeText(file: typeof libraryFiles.$inferSelect): Promi
   }
 }
 
+/** The homepage's counts — cached by the dashboard procedure (see readCache.ts). */
+async function loadDashboard() {
+  // One row, one connection, one round-trip. This deliberately does NOT fan
+  // the counts out across parallel queries: Supabase's session-mode pooler
+  // allows 15 client connections in total, shared with the session store and
+  // with every other instance of this server, and a burst of concurrent
+  // counts exhausts it (PostgresError EMAXCONNSESSION) — which fails the
+  // whole tRPC batch, so the homepage renders nothing at all. Conditional
+  // aggregates get the same numbers from a single scan instead.
+  //
+  // The per-category counts ride along in the same statement as a JSON
+  // subquery rather than a second query: the API and the database sit on
+  // different continents, and every sequential statement costs a full
+  // round-trip between them (~130ms) — a second query here was half of this
+  // endpoint's time.
+  const publishedSql = sql`${libraryFiles.status} = 'published' and ${libraryFiles.visibility} = 'public'`;
+  const publishedCount = (extra?: SQL) =>
+    sql<number>`count(*) filter (where ${publishedSql}${extra ? sql` and ${extra}` : sql``})`.mapWith(Number);
+
+  type CategoryCount = { categoryId: string; name: string; slug: string; fileCount: number };
+  const categoryCountsJson = sql<CategoryCount[]>`(
+    select coalesce(
+      json_agg(json_build_object('categoryId', c.id, 'name', c.name, 'slug', c.slug, 'fileCount', c.file_count)
+               order by c.file_count desc),
+      '[]'::json)
+    from (
+      select cat.id, cat.name, cat.slug, count(f.id)::int as file_count
+      from ${libraryCategories} cat
+      left join ${libraryFiles} f
+        on f.category_id = cat.id and f.status = 'published' and f.visibility = 'public'
+      group by cat.id
+    ) c
+  )`.mapWith((v: unknown) => (typeof v === "string" ? JSON.parse(v) : v) as CategoryCount[]);
+
+  const [totals] = await db
+    .select({
+      total: count(),
+      published: publishedCount(),
+      draft: sql<number>`count(*) filter (where ${libraryFiles.status} = 'draft')`.mapWith(Number),
+      archived: sql<number>`count(*) filter (where ${libraryFiles.status} = 'archived')`.mapWith(Number),
+      uncategorized: publishedCount(sql`${libraryFiles.categoryId} is null`),
+      ebook: publishedCount(sql`${libraryFiles.documentType} = 'ebook'`),
+      document: publishedCount(sql`${libraryFiles.documentType} = 'document'`),
+      spreadsheet: publishedCount(sql`${libraryFiles.documentType} = 'spreadsheet'`),
+      program: publishedCount(sql`${libraryFiles.documentType} = 'program'`),
+      slide: publishedCount(sql`${libraryFiles.documentType} = 'slide'`),
+      poster: publishedCount(sql`${libraryFiles.documentType} = 'poster'`),
+      other: publishedCount(sql`${libraryFiles.documentType} = 'other'`),
+      categoryCounts: categoryCountsJson,
+    })
+    .from(libraryFiles);
+
+  return {
+    total: totals.total,
+    published: totals.published,
+    draft: totals.draft,
+    archived: totals.archived,
+    uncategorized: totals.uncategorized,
+    typeCounts: {
+      ebook: totals.ebook,
+      document: totals.document,
+      spreadsheet: totals.spreadsheet,
+      program: totals.program,
+      slide: totals.slide,
+      poster: totals.poster,
+      other: totals.other,
+    },
+    categoryCounts: totals.categoryCounts,
+  };
+}
+
 export const libraryRouter = router({
-  dashboard: publicProcedure.query(async () => {
-    // One row, one connection, one round-trip. This deliberately does NOT fan
-    // the counts out across parallel queries: Supabase's session-mode pooler
-    // allows 15 client connections in total, shared with the session store and
-    // with every other instance of this server, and a burst of concurrent
-    // counts exhausts it (PostgresError EMAXCONNSESSION) — which fails the
-    // whole tRPC batch, so the homepage renders nothing at all. Conditional
-    // aggregates get the same numbers from a single scan instead.
-    //
-    // The per-category counts ride along in the same statement as a JSON
-    // subquery rather than a second query: the API and the database sit on
-    // different continents, and every sequential statement costs a full
-    // round-trip between them (~130ms) — a second query here was half of this
-    // endpoint's time.
-    const publishedSql = sql`${libraryFiles.status} = 'published' and ${libraryFiles.visibility} = 'public'`;
-    const publishedCount = (extra?: SQL) =>
-      sql<number>`count(*) filter (where ${publishedSql}${extra ? sql` and ${extra}` : sql``})`.mapWith(Number);
-
-    type CategoryCount = { categoryId: string; name: string; slug: string; fileCount: number };
-    const categoryCountsJson = sql<CategoryCount[]>`(
-      select coalesce(
-        json_agg(json_build_object('categoryId', c.id, 'name', c.name, 'slug', c.slug, 'fileCount', c.file_count)
-                 order by c.file_count desc),
-        '[]'::json)
-      from (
-        select cat.id, cat.name, cat.slug, count(f.id)::int as file_count
-        from ${libraryCategories} cat
-        left join ${libraryFiles} f
-          on f.category_id = cat.id and f.status = 'published' and f.visibility = 'public'
-        group by cat.id
-      ) c
-    )`.mapWith((v: unknown) => (typeof v === "string" ? JSON.parse(v) : v) as CategoryCount[]);
-
-    const [totals] = await db
-      .select({
-        total: count(),
-        published: publishedCount(),
-        draft: sql<number>`count(*) filter (where ${libraryFiles.status} = 'draft')`.mapWith(Number),
-        archived: sql<number>`count(*) filter (where ${libraryFiles.status} = 'archived')`.mapWith(Number),
-        uncategorized: publishedCount(sql`${libraryFiles.categoryId} is null`),
-        ebook: publishedCount(sql`${libraryFiles.documentType} = 'ebook'`),
-        document: publishedCount(sql`${libraryFiles.documentType} = 'document'`),
-        spreadsheet: publishedCount(sql`${libraryFiles.documentType} = 'spreadsheet'`),
-        program: publishedCount(sql`${libraryFiles.documentType} = 'program'`),
-        slide: publishedCount(sql`${libraryFiles.documentType} = 'slide'`),
-        poster: publishedCount(sql`${libraryFiles.documentType} = 'poster'`),
-        other: publishedCount(sql`${libraryFiles.documentType} = 'other'`),
-        categoryCounts: categoryCountsJson,
-      })
-      .from(libraryFiles);
-
-    return {
-      total: totals.total,
-      published: totals.published,
-      draft: totals.draft,
-      archived: totals.archived,
-      uncategorized: totals.uncategorized,
-      typeCounts: {
-        ebook: totals.ebook,
-        document: totals.document,
-        spreadsheet: totals.spreadsheet,
-        program: totals.program,
-        slide: totals.slide,
-        poster: totals.poster,
-        other: totals.other,
-      },
-      categoryCounts: totals.categoryCounts,
-    };
-  }),
+  dashboard: publicProcedure.query(() => cachedRead("library.dashboard", loadDashboard)),
 
   categories: publicProcedure
     .input(z.object({ search: z.string().optional(), subject: z.string().optional() }).optional())
-    .query(async ({ input }) => {
+    .query(({ input }) => cachedRead(`library.categories:${JSON.stringify(input ?? null)}`, async () => {
       const searchFilter = input?.search ? ilike(libraryCategories.name, `%${input.search}%`) : undefined;
       // By slug, not id: the URL carries the slug, so a page can ask for its
       // own วิชา without first fetching the subject to learn its id.
@@ -238,7 +242,7 @@ export const libraryRouter = router({
         .from(libraryCategories)
         .where(and(searchFilter, subjectFilter))
         .orderBy(asc(libraryCategories.name));
-    }),
+    })),
 
   files: publicProcedure
     .input(
@@ -253,7 +257,7 @@ export const libraryRouter = router({
         pageSize: z.number().int().min(1).max(50).default(20),
       }),
     )
-    .query(async ({ input }) => {
+    .query(({ input }) => cachedRead(`library.files:${JSON.stringify(input)}`, async () => {
       const keywordFilter = input.keyword
         ? or(
             ilike(libraryFiles.title, `%${input.keyword}%`),
@@ -298,13 +302,17 @@ export const libraryRouter = router({
         page: input.page,
         pageSize: input.pageSize,
       };
-    }),
+    })),
 
   fileById: publicProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ input, ctx }) => {
-    const [file] = await db
-      .select({ ...DETAIL_FILE_COLUMNS, storageKey: libraryFiles.storageKey, previewStorageKey: libraryFiles.previewStorageKey })
-      .from(libraryFiles)
-      .where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
+    // The row is cached; the links are signed fresh below, because a signed
+    // URL expires and a cached one would eventually hand out a dead link.
+    const [file] = await cachedRead(`library.fileById:${input.id}`, () =>
+      db
+        .select({ ...DETAIL_FILE_COLUMNS, storageKey: libraryFiles.storageKey, previewStorageKey: libraryFiles.previewStorageKey })
+        .from(libraryFiles)
+        .where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER)),
+    );
     if (!file) return null;
     const { storageKey, previewStorageKey, ...shared } = file;
     // Office files may not have their text stored yet — the first question

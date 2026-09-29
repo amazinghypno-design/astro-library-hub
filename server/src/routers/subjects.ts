@@ -4,6 +4,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { db } from "../db/client";
 import { libraryCategories, libraryFiles, notes, skills, subjects } from "../db/schema";
 import { adminProcedure, publicProcedure, router } from "./trpc";
+import { cachedRead } from "../readCache";
 
 /**
  * หมวดใหญ่ — the top level of the site.
@@ -32,10 +33,50 @@ import { adminProcedure, publicProcedure, router } from "./trpc";
 // slug stays the stable id an outside tool stores.
 const slugPattern = /^[a-z0-9ก-๙]+(?:-[a-z0-9ก-๙]+)*$/;
 
+/** One subject with the วิชา inside it — the subject hub page's whole payload. */
+async function loadSubjectHub(slug: string, userId: string | null) {
+  const [subject] = await db.select().from(subjects).where(eq(subjects.slug, slug));
+  if (!subject) throw new TRPCError({ code: "NOT_FOUND" });
+
+  const categories = await db
+    .select({
+      id: libraryCategories.id,
+      name: libraryCategories.name,
+      slug: libraryCategories.slug,
+      description: libraryCategories.description,
+      fileCount: sql<number>`(
+        select count(*)::int from ${libraryFiles} f
+        where f.category_id = ${libraryCategories}.id and f.status = 'published' and f.visibility = 'public'
+      )`,
+    })
+    .from(libraryCategories)
+    .where(eq(libraryCategories.subjectId, subject.id))
+    .orderBy(asc(libraryCategories.name));
+
+  const [counts] = await db
+    .select({
+      fileCount: sql<number>`(
+        select count(*)::int from ${libraryFiles} f
+        where f.subject_id = ${subject.id} and f.status = 'published' and f.visibility = 'public'
+      )`,
+      noteCount: userId
+        ? sql<number>`(select count(*)::int from ${notes} n where n.subject_id = ${subject.id} and n.user_id = ${userId})`
+        : sql<number>`0`,
+      skillCount: userId
+        ? sql<number>`(select count(*)::int from ${skills} s where s.subject_id = ${subject.id} and s.user_id = ${userId})`
+        : sql<number>`0`,
+    })
+    .from(subjects)
+    .where(eq(subjects.id, subject.id));
+
+  return { subject, categories, counts };
+}
+
 export const subjectsRouter = router({
-  list: publicProcedure.query(async ({ ctx }) => {
+  list: publicProcedure.query(({ ctx }) => {
     const userId = ctx.user?.id ?? null;
-    const rows = await db
+    // Per viewer: a signed-in owner's counts include their own pages and skills.
+    return cachedRead(`subjects.list:${userId ?? ""}`, () => db
       .select({
         id: subjects.id,
         slug: subjects.slug,
@@ -58,48 +99,16 @@ export const subjectsRouter = router({
           : sql<number>`0`,
       })
       .from(subjects)
-      .orderBy(asc(subjects.sortOrder), asc(subjects.name));
-    return rows;
+      .orderBy(asc(subjects.sortOrder), asc(subjects.name)));
   }),
 
-  /** One subject with the วิชา inside it — the subject hub page's whole payload. */
-  bySlug: publicProcedure.input(z.object({ slug: z.string().min(1) })).query(async ({ input, ctx }) => {
-    const [subject] = await db.select().from(subjects).where(eq(subjects.slug, input.slug));
-    if (!subject) throw new TRPCError({ code: "NOT_FOUND" });
-
-    const categories = await db
-      .select({
-        id: libraryCategories.id,
-        name: libraryCategories.name,
-        slug: libraryCategories.slug,
-        description: libraryCategories.description,
-        fileCount: sql<number>`(
-          select count(*)::int from ${libraryFiles} f
-          where f.category_id = ${libraryCategories}.id and f.status = 'published' and f.visibility = 'public'
-        )`,
-      })
-      .from(libraryCategories)
-      .where(eq(libraryCategories.subjectId, subject.id))
-      .orderBy(asc(libraryCategories.name));
-
-    const [counts] = await db
-      .select({
-        fileCount: sql<number>`(
-          select count(*)::int from ${libraryFiles} f
-          where f.subject_id = ${subject.id} and f.status = 'published' and f.visibility = 'public'
-        )`,
-        noteCount: ctx.user
-          ? sql<number>`(select count(*)::int from ${notes} n where n.subject_id = ${subject.id} and n.user_id = ${ctx.user.id})`
-          : sql<number>`0`,
-        skillCount: ctx.user
-          ? sql<number>`(select count(*)::int from ${skills} s where s.subject_id = ${subject.id} and s.user_id = ${ctx.user.id})`
-          : sql<number>`0`,
-      })
-      .from(subjects)
-      .where(eq(subjects.id, subject.id));
-
-    return { subject, categories, counts };
-  }),
+  /** One subject with the วิชา inside it — see loadSubjectHub. */
+  bySlug: publicProcedure
+    .input(z.object({ slug: z.string().min(1) }))
+    .query(({ input, ctx }) => {
+      const userId = ctx.user?.id ?? null;
+      return cachedRead(`subjects.bySlug:${input.slug}:${userId ?? ""}`, () => loadSubjectHub(input.slug, userId));
+    }),
 
   create: adminProcedure
     .input(
