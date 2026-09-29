@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Request } from "express";
-import { and, asc, count, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/client";
 import { libraryCategories, libraryFiles, shareLinks, subjects } from "../db/schema";
 import { TRPCError } from "@trpc/server";
@@ -10,7 +10,7 @@ import { selectOverviewPassages, selectRelevantPassages } from "../domain/passag
 import { router, publicProcedure } from "./trpc";
 import { storageAdapter } from "../storage/index";
 import { extractOfficeText, hasExtractableText } from "../services/officeText";
-import { renderOfficePreviewCached, STORAGE_READ_FAILED } from "../services/officePreview";
+import { peekOfficePreview, renderOfficePreviewCached, STORAGE_READ_FAILED } from "../services/officePreview";
 
 import { aiAdapter } from "../ai/index";
 
@@ -64,6 +64,15 @@ const DETAIL_FILE_COLUMNS = {
 const viewInput = z.union([z.object({ id: z.string().uuid() }), z.object({ token: z.string().min(1) })]);
 
 /**
+ * Every column of a file row except its extracted text, which can run to
+ * hundreds of KB per book and crosses an ocean on its way here (the API and
+ * the database are on different continents). Nothing that only shows or
+ * serves a file needs the text itself — only whether there is any.
+ */
+const { extractedText: _extractedText, ...VIEWABLE_FILE_COLUMNS_BASE } = getTableColumns(libraryFiles);
+const VIEWABLE_FILE_COLUMNS = { ...VIEWABLE_FILE_COLUMNS_BASE, hasText: DETAIL_FILE_COLUMNS.hasText };
+
+/**
  * Single gate for "can this viewer see this file": either it's genuinely
  * public (status=published, visibility=public), or the caller holds a
  * currently-valid share token for it — see domain/shareLink.ts. A share link
@@ -72,12 +81,16 @@ const viewInput = z.union([z.object({ id: z.string().uuid() }), z.object({ token
  */
 async function resolveViewableFile(input: z.infer<typeof viewInput>) {
   if ("token" in input) {
-    const [link] = await db.select().from(shareLinks).where(eq(shareLinks.token, input.token));
-    if (!link || !isShareLinkValid(link, new Date())) return null;
-    const [file] = await db.select().from(libraryFiles).where(eq(libraryFiles.id, link.fileId));
-    return file ?? null;
+    // The link and its file in one statement, not two in a row.
+    const [row] = await db
+      .select({ link: shareLinks, file: VIEWABLE_FILE_COLUMNS })
+      .from(shareLinks)
+      .innerJoin(libraryFiles, eq(libraryFiles.id, shareLinks.fileId))
+      .where(eq(shareLinks.token, input.token));
+    if (!row || !isShareLinkValid(row.link, new Date())) return null;
+    return row.file;
   }
-  const [file] = await db.select().from(libraryFiles).where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
+  const [file] = await db.select(VIEWABLE_FILE_COLUMNS).from(libraryFiles).where(and(eq(libraryFiles.id, input.id), PUBLIC_FILTER));
   return file ?? null;
 }
 
@@ -103,6 +116,22 @@ async function viewLinks(file: LinkableFile, req: Request, token?: string) {
     previewUrl: inlineFromStorage ? await storageAdapter.createPreviewUrl(file.previewStorageKey ?? file.storageKey) : null,
     downloadUrl: `${req.protocol}://${req.get("host")}/download/${file.id}${tokenQuery}`,
   };
+}
+
+/**
+ * A Word or Excel file's rendered preview, when the server already has it.
+ *
+ * The reader used to learn a file was a Word document from its metadata and
+ * only then ask for the preview — a second trip, after the first had come
+ * back. The boot-time warmer renders every published Office file, so the
+ * answer is almost always sitting in memory already; handing it over with the
+ * metadata opens the document in one trip. `officePreview: null` means "not
+ * ready, ask previewHtml", which renders it.
+ */
+function officePreviewIfReady(file: { id: string; mimeType: string; originalName: string }) {
+  const capability = previewCapability(file.mimeType, file.originalName);
+  if (capability !== "docx-inline" && capability !== "xlsx-inline") return { officePreview: null };
+  return { officePreview: peekOfficePreview(file.id) ?? null };
 }
 
 /**
@@ -282,7 +311,7 @@ export const libraryRouter = router({
     // asked of one extracts it (backfillOfficeText), so the reader is offered
     // the Q&A panel rather than being told the file does not support it.
     const canAskAi = file.hasText || hasExtractableText(file.mimeType, file.originalName);
-    return { ...shared, canAskAi, ...(await viewLinks(file, ctx.req)) };
+    return { ...shared, canAskAi, ...officePreviewIfReady(file), ...(await viewLinks(file, ctx.req)) };
   }),
 
   fileByShareToken: publicProcedure.input(z.object({ token: z.string().min(1) })).query(async ({ input, ctx }) => {
@@ -290,11 +319,11 @@ export const libraryRouter = router({
     // storageKey — so the trimming to the public shape happens here instead.
     const file = await resolveViewableFile({ token: input.token });
     if (!file) throw new TRPCError({ code: "NOT_FOUND", message: "SHARE_LINK_INVALID_OR_EXPIRED" });
-    const { extractedText, storageKey, previewStorageKey, checksum, createdBy, status, visibility, updatedAt, ...shared } = file;
+    const { storageKey, previewStorageKey, checksum, createdBy, status, visibility, updatedAt, ...shared } = file;
     return {
       ...shared,
-      hasText: !!extractedText && extractedText.length > 0,
-      canAskAi: (!!extractedText && extractedText.length > 0) || hasExtractableText(file.mimeType, file.originalName),
+      canAskAi: file.hasText || hasExtractableText(file.mimeType, file.originalName),
+      ...officePreviewIfReady(file),
       ...(await viewLinks(file, ctx.req, input.token)),
     };
   }),

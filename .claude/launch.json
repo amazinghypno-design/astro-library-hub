@@ -19,6 +19,21 @@
       ],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "astro-library-hub-client-5180",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--workspace",
+        "client",
+        "--",
+        "--port",
+        "5180",
+        "--strictPort"
+      ],
+      "port": 5180
     }
   ]
 }

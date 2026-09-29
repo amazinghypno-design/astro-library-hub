@@ -1,6 +1,16 @@
-import type { Ref } from "react";
+import { Suspense, lazy, type Ref } from "react";
 import OfficePreview from "./OfficePreview";
-import PdfReader from "./PdfReader";
+
+// PDF.js is the heaviest thing on the reader page (~130KB compressed), and as a
+// static import the page could not render — nor ask the API for the book — until
+// it had downloaded and parsed it, even for a Word file that never uses it. Lazy,
+// it downloads alongside the book's data instead of in front of it; the pages
+// that show a reader start fetching it on mount (preloadPdfReader).
+const loadPdfReader = () => import("./PdfReader");
+const PdfReader = lazy(loadPdfReader);
+export function preloadPdfReader() {
+  void loadPdfReader();
+}
 import type { ReaderHandle } from "../lib/useReaderFullscreen";
 
 /**
@@ -44,7 +54,7 @@ export default function FilePreviewPane({
       </div>
     );
   }
-  if (isLoading) return <div className="flex items-center justify-center h-[400px] text-navy-700/60">กำลังเตรียมตัวอย่าง...</div>;
+  if (isLoading) return <PreviewLoading />;
 
   if (capability === "pdf-inline") {
     if (isError || !previewUrl) return <PreviewError />;
@@ -52,7 +62,11 @@ export default function FilePreviewPane({
     // browser's native <embed>/<iframe> PDF viewer — that was unreliable in
     // practice (verified: a real 145-page scanned PDF rendered as a plain
     // black box in real desktop Chrome, with no visible error).
-    return <PdfReader ref={readerRef} url={previewUrl} fileId={fileId} pageOffset={pageOffset} title={title} />;
+    return (
+      <Suspense fallback={<PreviewLoading />}>
+        <PdfReader ref={readerRef} url={previewUrl} fileId={fileId} pageOffset={pageOffset} title={title} />
+      </Suspense>
+    );
   }
   if (capability === "image-inline") {
     if (isError || !previewUrl) return <PreviewError />;
@@ -71,6 +85,10 @@ export default function FilePreviewPane({
     return <OfficePreview ref={readerRef} kind="xlsx" sheets={sheets} fileId={fileId} title={title} />;
   }
   return null;
+}
+
+function PreviewLoading() {
+  return <div className="flex items-center justify-center h-[400px] text-navy-700/60">กำลังเตรียมตัวอย่าง...</div>;
 }
 
 function PreviewError() {

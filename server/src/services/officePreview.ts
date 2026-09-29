@@ -17,6 +17,11 @@ const cacheKeyFor = (fileId: string) => `preview:${fileId}`;
 /** Thrown when the file could not be read from storage, as opposed to failing to convert. */
 export const STORAGE_READ_FAILED = "STORAGE_READ_FAILED";
 
+/** The rendered preview if it is already in memory — never renders or reads storage. */
+export function peekOfficePreview(fileId: string): OfficePreviewResult | undefined {
+  return getCachedPreview<OfficePreviewResult>(cacheKeyFor(fileId));
+}
+
 /**
  * The one place that turns a stored Word/Excel file into preview HTML, so the
  * request path and the boot-time warmer cannot drift apart on caching rules.

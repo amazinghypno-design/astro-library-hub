@@ -4,6 +4,7 @@ import { trpc } from "../lib/trpc";
 import { IconSearch } from "../components/icons";
 import FileCollection from "../components/FileCollection";
 import VoiceSearchButton from "../components/VoiceSearchButton";
+import { useSlowLoadNotice } from "../lib/staleCache";
 
 export default function Search() {
   const [params, setParams] = useSearchParams();
@@ -11,7 +12,10 @@ export default function Search() {
   const [input, setInput] = useState(q);
   const [page, setPage] = useState(1);
 
-  const query = trpc.library.files.useQuery({ keyword: q || undefined, page, pageSize: 20 });
+  // keepPreviousData: turning a page keeps the current results on screen until
+  // the next ones arrive, instead of blanking the list to "กำลังค้นหา...".
+  const query = trpc.library.files.useQuery({ keyword: q || undefined, page, pageSize: 20 }, { keepPreviousData: true });
+  const showWakingNotice = useSlowLoadNotice(query.isLoading);
 
   const resultSummary = useMemo(() => {
     if (!query.data) return null;
@@ -53,7 +57,14 @@ export default function Search() {
         </button>
       </form>
 
-      {query.isLoading && <div className="text-navy-700/60">กำลังค้นหา...</div>}
+      {query.isLoading && (
+        <div className="text-navy-700/60">
+          กำลังค้นหา...
+          {showWakingNotice && (
+            <div className="text-sm mt-1">เซิร์ฟเวอร์พักตัวเมื่อไม่มีคนใช้งาน การเข้าครั้งแรกอาจรอ ~30 วินาที หลังจากนี้จะเร็วตามปกติ</div>
+          )}
+        </div>
+      )}
       {query.isError && <div className="text-red-700">ค้นหาไม่สำเร็จ ลองใหม่อีกครั้ง</div>}
       {query.data && (
         <>

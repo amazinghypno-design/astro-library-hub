@@ -1,8 +1,8 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 import { IconDownload, IconExpand } from "../components/icons";
-import FilePreviewPane, { hasOwnReader } from "../components/FilePreviewPane";
+import FilePreviewPane, { hasOwnReader, preloadPdfReader } from "../components/FilePreviewPane";
 import type { ReaderHandle } from "../lib/useReaderFullscreen";
 
 /** Public view for a share-link token — deliberately does not require login, and can show a Draft file. */
@@ -13,7 +13,17 @@ export default function ShareView() {
   const needsRenderedHtml = capability === "docx-inline" || capability === "xlsx-inline";
 
   // Links ride along with the metadata — see the same note in FileDetail.
-  const previewHtmlQuery = trpc.library.previewHtml.useQuery({ token: token! }, { enabled: !!token && needsRenderedHtml });
+  // Usually the rendered preview arrives with the metadata (officePreview);
+  // this second trip is only for a document the server has not rendered yet.
+  const officePreview = fileQuery.data?.officePreview ?? null;
+  const previewHtmlQuery = trpc.library.previewHtml.useQuery(
+    { token: token! },
+    { enabled: !!token && needsRenderedHtml && !officePreview },
+  );
+  const renderedPreview = officePreview ?? previewHtmlQuery.data;
+
+  // Most books are PDFs: fetch the reader's engine while the data is in flight.
+  useEffect(preloadPdfReader, []);
 
   // Scroll the reader into view first, so leaving fullscreen later lands the
   // reader on screen rather than back at the top of the page.
@@ -78,10 +88,10 @@ export default function ShareView() {
         <FilePreviewPane
           capability={file.preview}
           previewUrl={file.previewUrl ?? undefined}
-          isLoading={needsRenderedHtml && previewHtmlQuery.isLoading}
-          isError={needsRenderedHtml && previewHtmlQuery.isError}
-          html={previewHtmlQuery.data?.html ?? undefined}
-          sheets={previewHtmlQuery.data?.sheets ?? undefined}
+          isLoading={needsRenderedHtml && !renderedPreview && previewHtmlQuery.isLoading}
+          isError={needsRenderedHtml && !renderedPreview && previewHtmlQuery.isError}
+          html={renderedPreview?.html ?? undefined}
+          sheets={renderedPreview?.sheets ?? undefined}
           fileId={file.id}
           pageOffset={file.pageOffset}
           title={file.title}

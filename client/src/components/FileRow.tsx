@@ -34,6 +34,8 @@ export default function FileRow({ file }: { file: CollectionFile }) {
   const prefetch = () => {
     void utils.library.fileById.prefetch({ id: file.id });
     void import("../pages/FileDetail");
+    // …and the PDF engine the reader will need, which is its own chunk too.
+    if (file.preview === "pdf-inline") void import("./PdfReader");
   };
 
   return (

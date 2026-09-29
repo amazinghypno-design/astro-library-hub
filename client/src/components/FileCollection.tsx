@@ -15,6 +15,8 @@ export interface CollectionFile {
   pageCount: number | null;
   hasCover?: boolean;
   coverVersion?: string | Date | null;
+  /** How the reader will show it — lets a card warm up the right code before it is opened. */
+  preview?: string;
 }
 
 /**

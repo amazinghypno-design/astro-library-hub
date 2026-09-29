@@ -15,6 +15,8 @@ interface FileCardFile {
   categoryId: string | null;
   hasCover?: boolean;
   coverVersion?: string | Date | null;
+  /** How the reader will show it — lets a card warm up the right code before it is opened. */
+  preview?: string;
 }
 
 /**
@@ -54,6 +56,8 @@ export default function FileCard({ file }: { file: FileCardFile }) {
     void utils.library.fileById.prefetch({ id: file.id });
     // The reader's code is a separate chunk; pull it in alongside the data.
     void import("../pages/FileDetail");
+    // …and the PDF engine the reader will need, which is its own chunk too.
+    if (file.preview === "pdf-inline") void import("./PdfReader");
   };
 
   return (
